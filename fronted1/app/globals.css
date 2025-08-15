@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+
+@layer utilities {
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+} 
+
+
+@layer components {
+  .excel-cell-green {
+    @apply h-8 border border-emerald-300 bg-emerald-50 text-emerald-700 flex items-center justify-center text-xs font-medium rounded transition-all duration-300;
+  }
+}
+
+
+
+@keyframes waveAnim {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-10%);
+  }
+}
+
+.animate-wave-slow {
+  animation: waveAnim 6s linear infinite;
+}
+
+.animate-wave-medium {
+  animation: waveAnim 6s linear infinite;
+  animation-delay: -2s;
+}
+
+.animate-wave-fast {
+  animation: waveAnim 6s linear infinite;
+  animation-delay: -4s;
+}
+
+
+
+@layer utilities {
+  @keyframes excel-data-flow {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+
+  @keyframes chart-morph {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+  }
+
+  @keyframes particle-dance {
+    0%, 100% { transform: rotate(0deg); }
+    50% { transform: rotate(360deg); }
+  }
+
+  @keyframes glow {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+
+  .animate-excel-data-flow {
+    animation: excel-data-flow 2s infinite ease-in-out;
+  }
+
+  .animate-chart-morph {
+    animation: chart-morph 2s infinite ease-in-out;
+  }
+
+  .animate-particle-dance {
+    animation: particle-dance 2s infinite linear;
+  }
+
+  .animate-glow {
+    animation: glow 2s infinite ease-in-out;
+  }
+}
+
+@keyframes fadeInUp {
+        
+  0% { 
+    opacity: 0; 
+    transform: translateY(10px); 
+  }
+  100% { 
+    opacity: 1; 
+    transform: translateY(0); 
+  }
+}
+      
+.animate-fadeInUp {
+  animation:  fadeInUp 0.6s ease-out forwards;
+} 
+      
+.canvas-layer.layer1 {
+  z-index: 0;
+  opacity: 0.3;
+}
+
+.canvas-layer.layer2 {
+  z-index: 0;
+  opacity: 0.2;
+}
+
+.gradient-background {
+  background: radial-gradient(circle at top, #f3f4f6, #ffffff);
+  z-index: 0;
+}
+
+/* styles/globals.css or tailwind.css */
+.btn-primary {
+  @apply bg-blue-600 text-white rounded px-4 py-1 hover:bg-blue-700 transition;
+}
+.btn-secondary {
+  @apply border border-gray-500 rounded px-4 py-1 hover:border-gray-700 transition;
+}
