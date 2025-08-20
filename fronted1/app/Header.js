@@ -6,13 +6,13 @@ import { setUser } from "@/redux/authSlice";
 import { toast } from "react-toastify";
 import Heroes from "../components/Heroes";
 
-export default function Header() {
+export default function Header({ photos }) {
   const { user } = useSelector((state) => state.auth);
   const dispatch = useDispatch();
   const apiUrl = process.env.NEXT_PUBLIC_API_URL;
   const logoutHandler = async () => {
     try {
-      const res = await fetch(`${apiUrl}/api/v1/user/logout`, user ,{
+      const res = await fetch(`${apiUrl}/api/v1/user/logout`, user, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -114,7 +114,16 @@ export default function Header() {
                   </Link>
 
                   <Link href="/profile">
-                    <FaUserCircle size={40} className="text-blue-600" />
+                    {photos ? (
+                      <img
+                        src={photos}
+                        alt="Profile"
+                        className="w-10 h-10 rounded-full border"
+                      />
+                      
+                    ) : (
+                      <FaUserCircle size={40} className="text-blue-600" />
+                    )}
                   </Link>
 
                   <button

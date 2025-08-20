@@ -1,14 +1,13 @@
 import { User } from "../models/User.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import multer from "multer";
-import fs from "fs"; 
+import fs from "fs";
 import path from "path";
 import XLSX from "xlsx";
 import { error } from "console";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-
-
+import cloudinary from "../cloudinary/cloudinary.js";
+import upload from "../multer/multer.js";
 
 export const register = async (req, res) => {
   try {
@@ -38,7 +37,7 @@ export const register = async (req, res) => {
     });
   } catch (error) {
     console.log(error);
-    return res.status(201).json({
+    return res.status(500).json({
       success: false,
       message: "failed to register",
     });
@@ -81,131 +80,90 @@ export const login = async (req, res) => {
         message: `Welcome back ${user.name}`,
         success: true,
         user,
+        
       });
   } catch (error) {
     console.log(error);
   }
 };
-export const logout = async(req,res)=> {
+export const logout = async (req, res) => {
   try {
-    return res.status(200).cookie("token", "", {maxAge:0}).json({
-      message:"Logout successfully",
-      success:true
-    })
+    return res.status(200).cookie("token", "", { maxAge: 0 }).json({
+      message: "Logout successfully",
+      success: true,
+    });
   } catch (error) {
-    console.log(error)
+    console.log(error);
     return res.status(500).json({
-       success:false,
-       message:"Failed to logout"
-    })
+      success: false,
+      message: "Failed to logout",
+    });
   }
-}
-
+};
 
 const genAI = new GoogleGenerativeAI(process.env.GEMNI_AI_API, {
   apiVersion: "v1",
 });
-export const GemniApi = async(req, res) => {
+export const GemniApi = async (req, res) => {
   try {
     const { data, query } = req.body;
     const prompt = `${query}:\n\n${JSON.stringify(data)}`;
-    
-    const model = genAI.getGenerativeModel({model: "gemini-2.5-flash"});
+
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     const result = await model.generateContent(prompt);
 
-   if (!result || !result.response) {
+    if (!result || !result.response) {
       console.error("❌ Gemini: No response from model");
       return res.status(500).json({ error: "No response from Gemini model." });
     }
 
     const text = await result.response.text();
-    
 
     res.json({ reply: text });
   } catch (error) {
     console.error("Gemini Error:", error.message);
     res.status(500).json({ error: "Gemini AI analysis failed." });
   }
-}
-// const storage = multer.diskStorage({
-//   destination: function (req, file, cb) {
-//     const dir = "./public/Images";
-//     if (!fs.existsSync(dir)) {
-//       fs.mkdirSync(dir, { recursive: true });
-//     }
-//     cb(null, dir);
-//   },
-//   filename: function (req, file, cb) {
-//     const uniqueName = `${Date.now()}_${file.originalname}`;
-//     cb(null, uniqueName);
-//   },
-// });
-
-// export const uploadMiddleware = multer({ 
-//   storage ,
-//   fileFilter:(req, file, cb) => {
-//     if(file.mimetype.startsWith("image/")) cb(null, true);
-//     else cb(new error("only image files are allowed"), false);
-//   }
-// });
-
-// // ========== UPLOAD HANDLER ==========
+};
 
 
-// // 👇 Keep your multer setup same
+export const updatePhoto = async (req, res) => {
+  try {
+    const userId = req.user.id; 
+    const file = req.file;
 
-// export const handleUpload = async(req, res) => {
-//   // if (!req.file) {
-//   //   return res.status(400).json({ success: false, message: "No file uploaded" });
-//   // }
-//   const imageUrl =  `/images/${req.file.filename}`;
-//   try {
-//     await User.findByIdAndUpdate(req.user.id, { photoImage: imageUrl });
-//     res.json({ imageUrl });
-//   } catch (error) {
-//     console.error("Upload error:", err);
-//     res.status(500).json({ success: false, message: "Image upload failed" });
-//   }
- 
+    if (!file) {
+      return res.status(400).json({ message: "No image uploaded" });
+    }
+
+   
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: "user_profiles" },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      stream.end(file.buffer);
+    });
 
   
-//   // const filePath = path.join("public", "Images", req.file.filename);
-//   // try {
-//   //   const workbook = XLSX.readFile(filePath);
-//   //   const sheetName = workbook.SheetNames[0];
-//   //   const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
-
-//   //   res.status(200).json({
-//   //     success: true,
-//   //     message: "File uploaded and read successfully",
-//   //     filename: req.file.filename,
-//   //     path: `/images/${req.file.filename}`,
-//   //     excelData: data, // 👈 Excel content as JSON
-//   //   });
-//   // } catch (err) {
-//   //   console.error("Error reading Excel file:", err);
-//   //   res.status(500).json({ success: false, message: "Failed to read Excel file" });
-//   // }
-// };
-
-
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const dir = "./public/Images";
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
     }
-    cb(null, dir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueName = `${Date.now()}-${file.originalname}`;
-    cb(null, uniqueName);
-  },
-});
 
+    user.photo = result.secure_url; 
+    await user.save();
 
-
-
-export const upload = multer({ storage });
-
-
+    res.json({
+      message: "Photo updated successfully",
+      success: true,
+      user,
+    });
+  } catch (error) {
+    console.error("Upload error:", error);
+    res.status(500).json({ message: "Server error", error });
+  }
+};

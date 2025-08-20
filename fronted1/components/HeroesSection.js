@@ -1,7 +1,8 @@
+"use client";
 
-"use client"; 
-
+import Link from "next/link";
 import React from "react";
+import { Line } from "react-chartjs-2";
 import { FaChartLine } from "react-icons/fa";
 
 const HeroSection = () => {
@@ -43,12 +44,16 @@ const HeroSection = () => {
 
       {/* Buttons */}
       <div className="mt-10 flex flex-wrap justify-center gap-4 text-lg">
-        <button className="px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 via-purple-600 to-pink-500 text-white font-medium shadow-lg hover:scale-105 transition-transform">
-          Start Free Trial
-        </button>
-        <button className="px-6 py-3 rounded-xl bg-gradient-to-r from-gray-500 to-gray-700 text-white font-medium shadow-lg hover:scale-105 transition-transform">
-          Sign In
-        </button>
+        <Link href="/upload">
+          <button className="px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 via-purple-600 to-pink-500 text-white font-medium shadow-lg hover:scale-105 transition-transform  cursor-pointer">
+            Start Free Trial
+          </button>
+        </Link>
+        <Link href="/signup">
+          <button className="px-6 py-3 rounded-xl bg-gradient-to-r from-gray-500 to-gray-700 text-white font-medium shadow-lg hover:scale-105 transition-transform  cursor-pointer">
+            Sign In
+          </button>
+        </Link>
       </div>
     </div>
   );

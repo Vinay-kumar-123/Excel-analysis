@@ -34,7 +34,7 @@ import userRoutes from "./routes/userRoutes.js";
 import dotenv from "dotenv";
 import multer from "multer";
 
-dotenv.config({ path: `.env.development` });
+dotenv.config();
 const app = express();
 
 // Middlewares
