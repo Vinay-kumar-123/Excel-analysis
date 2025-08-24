@@ -2,11 +2,15 @@
 import React from "react";
 import Link from "next/link";
 import { Table, BarChart2, FileSpreadsheet } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 const ExcelPreview = ({ data, fileName }) => {
+  const router = useRouter();
   const rowCount = data.length;
   const columnCount = Math.max(...data.map((row) => row.length));
-
+  const handleTab = () => {
+     router.push(`/tabSection?excelData=${encodeURIComponent(JSON.stringify(data))}`);
+  };
   return (
     <div className="bg-white shadow-lg rounded-2xl p-6 mt-6">
       
@@ -69,16 +73,13 @@ const ExcelPreview = ({ data, fileName }) => {
 
       
       <div className="flex justify-end mt-6">
-        <Link
-          href={{
-            pathname: "/tabSection",
-            query: { file: fileName },
-          }}
+        <button
+          onClick={handleTab}
           className="flex items-center gap-2 px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-medium shadow-lg transition"
         >
           <BarChart2 className="w-5 h-5" />
           Continue to Analysis
-        </Link>
+        </button>
       </div>
     </div>
   );
