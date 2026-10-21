@@ -1,53 +1,50 @@
-// import express from  "express";
-// import dotenv from "dotenv";
-//import connectToMongo from "./middleware/db.js";
-// import cors from "cors";
-// import userRoute from "./routes/userRoutes.js"
-// import cookieParser from "cookie-parser";
-//import multer from "multer";
-// dotenv.config();
-// const app = express();
-// const PORT = process.env.PORT || 3000;
-
-
-// app.use(express.json()); 
-// app.use(cookieParser());
-// app.use(express.urlencoded({extended:true}));
-
-// app.use(cors({
-//   origin: "http://localhost:3000",
-//   credentials: true
-// }));
-
-
-// app.use("/api/v1/user", userRoute)
-
-// app.listen(PORT, () => {
-//     connectToMongo();
-//     console.log(`Server is running on port ${PORT}`);
-// });
 import connectToMongo from "./middleware/db.js";
 import express from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import userRoutes from "./routes/userRoutes.js";
 import dotenv from "dotenv";
-import multer from "multer";
 
 dotenv.config();
 const app = express();
+const PORT = process.env.PORT || 8000;
 
 // Middlewares
-app.use(cors({ origin: "http://localhost:3000", credentials: true }));
-app.use(express.json());
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    credentials: true,
+  })
+);
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(cookieParser());
 app.use("/images", express.static("public/Images"));
+
+// Health check endpoint
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+});
 
 // Routes
 app.use("/api/v1/user", userRoutes);
 
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: "Route not found" });
+});
+
+// Global error handling middleware
+app.use((err, req, res, next) => {
+  console.error("Unhandled server error:", err);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || "Internal server error",
+  });
+});
+
 // Server
-app.listen(8000, () => {
+app.listen(PORT, () => {
   connectToMongo();
-  console.log("Server running on port 8000");
+  console.log(`Server running on port ${PORT}`);
 });

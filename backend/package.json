@@ -1,18 +1,19 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test tests/*.test.js",
     "dev": "nodemon server.js",
-    "start": "nodemon server.js"
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Backend API for Excel Analytics",
   "dependencies": {
+    "@google/genai": "^2.30.0",
     "@google/generative-ai": "^0.24.1",
     "bcryptjs": "^3.0.2",
     "cloudinary": "^2.7.0",

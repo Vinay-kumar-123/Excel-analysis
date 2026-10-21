@@ -1,20 +1,26 @@
 "use client";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useDispatch } from "react-redux";
 import { toast } from "react-toastify";
 import axios from "axios";
 import { setUser } from "@/redux/authSlice";
 import Link from "next/link";
+import { Lock, Info } from "lucide-react";
 
-export default function Login() {
+function LoginForm() {
   const router = useRouter();
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+  const searchParams = useSearchParams();
+  const redirectTarget = searchParams.get("redirect") || "/upload";
+  const hasRedirect = !!searchParams.get("redirect");
+
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const dispatch = useDispatch();
   const [input, setInput] = useState({
     email: "",
     password: "",
   });
+  const [loading, setLoading] = useState(false);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -26,6 +32,7 @@ export default function Login() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setLoading(true);
 
     try {
       const response = await axios.post(
@@ -38,29 +45,40 @@ export default function Login() {
       );
 
       if (response.data.success) {
-        router.push("/");
         dispatch(setUser(response.data.user));
-        toast.success(response.data.message);
-        
+        toast.success(response.data.message || "Logged in successfully");
+        router.push(redirectTarget);
       } else {
-        toast.error("Login failed: " + response.data.message);
+        toast.error("Login failed: " + (response.data.message || "Unknown error"));
       }
     } catch (error) {
       if (error.response?.data?.message) {
-        toast.error("Login failed: " + error.response.data.message);
+        toast.error(error.response.data.message);
       } else {
-        toast.error("An unexpected error occurred. Please try again.");
+        toast.error("Network error. Please ensure the backend is running.");
       }
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="bg-gray-100 flex items-center justify-center min-h-screen px-4">
+    <div className="bg-gray-100 flex items-center justify-center min-h-screen px-4 pt-16">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8">
+        {/* Prominent Login Required Notice if redirected */}
+        {hasRedirect && (
+          <div className="mb-6 p-3.5 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-3">
+            <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-blue-800 font-medium leading-relaxed">
+              Please log in to upload your data, visualize it, and access AI analytics.
+            </p>
+          </div>
+        )}
+
         <h2 className="text-3xl font-bold text-gray-800 mb-2 text-center">
           Welcome Back
         </h2>
-        <p className="text-gray-500 mb-6 text-center">
+        <p className="text-gray-500 mb-6 text-center text-sm">
           Please log in to your account
         </p>
 
@@ -75,7 +93,7 @@ export default function Login() {
               value={input.email}
               onChange={handleChange}
               placeholder="Enter your email"
-              className="mt-1 w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="mt-1 w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm"
               required
             />
           </div>
@@ -90,26 +108,41 @@ export default function Login() {
               value={input.password}
               onChange={handleChange}
               placeholder="Enter your password"
-              className="mt-1 w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="mt-1 w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm"
               required
             />
           </div>
 
           <button
             type="submit"
-            className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition duration-300 cursor-pointer"
+            disabled={loading}
+            className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition duration-300 cursor-pointer disabled:opacity-50"
           >
-            Login
+            {loading ? "Logging in..." : "Login"}
           </button>
         </form>
 
         <p className="mt-6 text-center text-gray-600 text-sm">
           Don't have an account?{" "}
-          <Link href="/signup" className="text-blue-600 hover:underline">
+          <Link href="/signup" className="text-blue-600 hover:underline font-semibold">
             Sign Up
           </Link>
         </p>
       </div>
     </div>
+  );
+}
+
+export default function Login() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+          <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   );
 }

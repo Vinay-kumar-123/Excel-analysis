@@ -1,5 +1,7 @@
-import { configureStore ,combineReducers} from "@reduxjs/toolkit";
-import authReducer from "./authSlice"
+import { configureStore, combineReducers } from "@reduxjs/toolkit";
+import authReducer from "./authSlice";
+import excelReducer from "./excelSlice";
+import storage from "./storage";
 import {
   persistReducer,
   FLUSH,
@@ -8,20 +10,24 @@ import {
   PERSIST,
   PURGE,
   REGISTER,
-} from 'redux-persist'
-import storage from 'redux-persist/lib/storage'
+} from "redux-persist";
 
+// Performance Optimization: Only persist 'auth' in storage.
+// Persisting large Excel datasets to localStorage blocks the main thread
+// with synchronous multi-megabyte JSON stringification on every action.
 const persistConfig = {
-  key: 'root',
+  key: "root",
   version: 1,
   storage,
-}
+  whitelist: ["auth"],
+};
+
 const rootReducer = combineReducers({
-  auth:authReducer,
+  auth: authReducer,
+  excel: excelReducer,
 });
 
-const persistedReducer = persistReducer(persistConfig, rootReducer)
-
+const persistedReducer = persistReducer(persistConfig, rootReducer);
 
 const store = configureStore({
   reducer: persistedReducer,
@@ -31,7 +37,6 @@ const store = configureStore({
         ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
       },
     }),
-})
+});
 
 export default store;
-

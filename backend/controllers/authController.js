@@ -1,13 +1,8 @@
 import { User } from "../models/User.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import fs from "fs";
-import path from "path";
-import XLSX from "xlsx";
-import { error } from "console";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import cloudinary from "../cloudinary/cloudinary.js";
-import upload from "../multer/multer.js";
 
 export const register = async (req, res) => {
   try {
@@ -36,10 +31,10 @@ export const register = async (req, res) => {
       message: "Account created successfully",
     });
   } catch (error) {
-    console.log(error);
+    console.error("Register error:", error);
     return res.status(500).json({
       success: false,
-      message: "failed to register",
+      message: "Failed to register",
     });
   }
 };
@@ -79,13 +74,23 @@ export const login = async (req, res) => {
       .json({
         message: `Welcome back ${user.name}`,
         success: true,
-        user,
-        
+        user: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          photo: user.photo,
+          description: user.description,
+        },
       });
   } catch (error) {
-    console.log(error);
+    console.error("Login error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to login. Please try again later.",
+    });
   }
 };
+
 export const logout = async (req, res) => {
   try {
     return res.status(200).cookie("token", "", { maxAge: 0 }).json({
@@ -93,7 +98,7 @@ export const logout = async (req, res) => {
       success: true,
     });
   } catch (error) {
-    console.log(error);
+    console.error("Logout error:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to logout",
@@ -101,42 +106,105 @@ export const logout = async (req, res) => {
   }
 };
 
-const genAI = new GoogleGenerativeAI(process.env.GEMNI_AI_API, {
-  apiVersion: "v1",
-});
-export const GemniApi = async (req, res) => {
+export const getProfile = async (req, res) => {
   try {
-    const { data, query } = req.body;
-    const prompt = `${query}:\n\n${JSON.stringify(data)}`;
-
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    const result = await model.generateContent(prompt);
-
-    if (!result || !result.response) {
-      console.error("❌ Gemini: No response from model");
-      return res.status(500).json({ error: "No response from Gemini model." });
+    const userId = req.user?._id || req.user?.id;
+    const user = await User.findById(userId).select("-password");
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
     }
-
-    const text = await result.response.text();
-
-    res.json({ reply: text });
+    return res.status(200).json({
+      success: true,
+      user,
+    });
   } catch (error) {
-    console.error("Gemini Error:", error.message);
-    res.status(500).json({ error: "Gemini AI analysis failed." });
+    console.error("Get profile error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch user profile",
+    });
   }
 };
 
+export const GemniApi = async (req, res) => {
+  try {
+    const { data, query } = req.body;
+    if (!data && !query) {
+      return res.status(400).json({ error: "Data or query prompt is required." });
+    }
+
+    const apiKey = process.env.GEMNI_AI_API || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "Gemini API key is not configured on the server." });
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const prompt = `${query || "Analyze this spreadsheet dataset and summarize key trends and insights"}:\n\n${typeof data === "string" ? data : JSON.stringify(data, null, 2)}`;
+
+    let text = "";
+    const executeGenAI = async () => {
+      // Try Interactions API first, fallback to generateContent (both using gemini-3.8-flash)
+      try {
+        const interaction = await ai.interactions.create({
+          model: "gemini-3.8-flash",
+          input: prompt,
+        });
+        if (interaction?.output_text) return interaction.output_text;
+      } catch (interactionErr) {
+        console.warn("Interactions API note:", interactionErr.message);
+      }
+
+      const contentRes = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: prompt,
+      });
+      return contentRes.text || "";
+    };
+
+    // Retry once or twice if Google returns high-demand/transient error (503/429)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        text = await executeGenAI();
+        if (text) break;
+      } catch (err) {
+        const isTransient =
+          err.status === 503 ||
+          err.status === 429 ||
+          (err.message && err.message.includes("high demand"));
+        if (isTransient && attempt < 3) {
+          console.warn(`Gemini API transient spike (attempt ${attempt}/3), retrying in ${attempt * 1000}ms...`);
+          await new Promise((r) => setTimeout(r, attempt * 1000));
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    if (!text) {
+      return res.status(500).json({ error: "No response text generated by Gemini." });
+    }
+
+    return res.status(200).json({ reply: text });
+  } catch (error) {
+    console.error("Gemini Error:", error.message);
+    return res.status(500).json({
+      error: error.message || "Gemini AI analysis failed.",
+    });
+  }
+};
 
 export const updatePhoto = async (req, res) => {
   try {
-    const userId = req.user.id; 
+    const userId = req.user?._id || req.user?.id;
     const file = req.file;
 
     if (!file) {
       return res.status(400).json({ message: "No image uploaded" });
     }
 
-   
     const result = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         { folder: "user_profiles" },
@@ -148,22 +216,27 @@ export const updatePhoto = async (req, res) => {
       stream.end(file.buffer);
     });
 
-  
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    user.photo = result.secure_url; 
+    user.photo = result.secure_url;
     await user.save();
 
-    res.json({
+    return res.json({
       message: "Photo updated successfully",
       success: true,
-      user,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        photo: user.photo,
+        description: user.description,
+      },
     });
   } catch (error) {
     console.error("Upload error:", error);
-    res.status(500).json({ message: "Server error", error });
+    return res.status(500).json({ message: "Server error", error: error.message });
   }
 };

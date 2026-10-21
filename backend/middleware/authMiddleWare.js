@@ -3,7 +3,6 @@ import { User } from "../models/User.js";
 
 const authMiddleware = async (req, res, next) => {
   try {
-    
     let token = req.cookies?.token;
 
     if (!token && req.headers.authorization?.startsWith("Bearer ")) {
@@ -11,29 +10,53 @@ const authMiddleware = async (req, res, next) => {
     }
 
     if (!token) {
-      return res.status(401).json({ message: "No token provided" });
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required. Please log in.",
+      });
     }
-    
-    const decoded = jwt.verify(token, process.env.SECRET_KEY);
+
+    const secret = process.env.SECRET_KEY;
+    if (!secret) {
+      console.error("SECRET_KEY environment variable is not defined");
+      return res.status(500).json({
+        success: false,
+        message: "Internal server configuration error",
+      });
+    }
+
+    const decoded = jwt.verify(token, secret);
 
     if (!decoded?.userId) {
-      return res.status(401).json({ message: "Invalid token" });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid authentication token.",
+      });
     }
 
-   
     const user = await User.findById(decoded.userId).select("-password");
 
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      return res.status(404).json({
+        success: false,
+        message: "User session not found.",
+      });
     }
 
-    
     req.user = user;
-
     next();
   } catch (error) {
-    console.error("Auth error:", error.message);
-    return res.status(401).json({ message: "Unauthorized" });
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({
+        success: false,
+        message: "Session expired. Please log in again.",
+      });
+    }
+    console.error("Auth middleware error:", error.message);
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: Invalid or expired session token.",
+    });
   }
 };
 
