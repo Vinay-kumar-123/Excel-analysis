@@ -3,6 +3,7 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import userRoutes from "./routes/userRoutes.js";
+import historyRoutes from "./routes/historyRoutes.js";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -33,6 +34,7 @@ app.get("/health", (req, res) => {
 
 // Routes
 app.use("/api/v1/user", userRoutes);
+app.use("/api/v1/history", historyRoutes);
 
 // 404 handler
 app.use((req, res) => {

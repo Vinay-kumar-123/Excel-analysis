@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Clock,
   Trash2,
@@ -14,13 +15,14 @@ import {
   Copy,
   Check,
   RefreshCw,
-  Cloud,
-  CloudCheck,
-  ChevronDown,
-  ChevronUp,
+  ExternalLink,
+  ChevronRight,
   FileSpreadsheet,
   AlertCircle,
-  FileText,
+  Layers,
+  Filter,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import { toast } from "react-toastify";
 import {
@@ -28,14 +30,18 @@ import {
   exportHistoryTableAsCsv,
   exportHistoryAsMarkdown,
   downloadBlob,
+  getValidEntryId,
+  isWorkbookEntry,
 } from "@/lib/analysisHistory.mjs";
 import {
   fetchUserHistory,
   deleteAnalysisHistory,
   clearAllAnalysisHistory,
 } from "@/lib/historyService";
+import { setExcelData } from "@/redux/excelSlice";
 
 export default function AnalysisHistory({ userId }) {
+  const router = useRouter();
   const dispatch = useDispatch();
   const rawEntries = useSelector((state) => state.history?.entries || []);
   const loading = useSelector((state) => state.history?.loading || false);
@@ -44,91 +50,127 @@ export default function AnalysisHistory({ userId }) {
   const isAuthenticated = Boolean(authUser);
 
   // Filter and display states
-  const [activeFilter, setActiveFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [fileTypeFilter, setFileTypeFilter] = useState("all");
   const [sortBy, setSortBy] = useState("newest");
-  const [visibleCount, setVisibleCount] = useState(10);
-  const [expandedCards, setExpandedCards] = useState({});
-  const [copiedId, setCopiedId] = useState(null);
+  const [visibleCount, setVisibleCount] = useState(15);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [entryToDelete, setEntryToDelete] = useState(null);
 
-  // Sync with backend on mount if authenticated
+  // Sync with backend on mount
   useEffect(() => {
     if (isAuthenticated) {
-      fetchUserHistory(dispatch);
+      fetchUserHistory(dispatch, {
+        search: searchQuery,
+        status: statusFilter,
+        fileType: fileTypeFilter,
+        sort: sortBy,
+      });
     }
-  }, [isAuthenticated, dispatch]);
+  }, [isAuthenticated, dispatch, statusFilter, fileTypeFilter, sortBy]);
 
-  // Filter entries for this specific user
+  // Filter entries: only workbook-level analyses for this user
   const userEntries = useMemo(() => {
     return rawEntries.filter((entry) => {
+      if (!isWorkbookEntry(entry)) return false;
       if (!userId || userId === "anonymous") return true;
       return !entry.userId || entry.userId === userId || entry.userId === "anonymous";
     });
   }, [rawEntries, userId]);
 
-  // Filtered and sorted results
+  // Client-side search and filters
   const filteredEntries = useMemo(() => {
-    return filterAndSortHistory(userEntries, {
-      type: activeFilter,
-      search: searchQuery,
-      sort: sortBy,
-    });
-  }, [userEntries, activeFilter, searchQuery, sortBy]);
+    let result = [...userEntries];
 
-  // Statistics overview
+    if (statusFilter && statusFilter !== "all") {
+      result = result.filter((e) => (e.status || "Completed").toLowerCase() === statusFilter.toLowerCase());
+    }
+
+    if (fileTypeFilter && fileTypeFilter !== "all") {
+      result = result.filter((e) => (e.fileType || "xlsx").toLowerCase() === fileTypeFilter.toLowerCase());
+    }
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      result = result.filter((e) => {
+        const name = (e.fileName || e.title || "").toLowerCase();
+        const sheet = (e.selectedSheet || (e.sheetNames || []).join(" ")).toLowerCase();
+        const prompt = (e.prompt || "").toLowerCase();
+        return name.includes(q) || sheet.includes(q) || prompt.includes(q);
+      });
+    }
+
+    result.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return sortBy === "oldest" ? timeA - timeB : timeB - timeA;
+    });
+
+    return result;
+  }, [userEntries, statusFilter, fileTypeFilter, searchQuery, sortBy]);
+
+  // Summary statistics overview
   const stats = useMemo(() => {
     const total = userEntries.length;
-    const aiCount = userEntries.filter((e) => e.type === "ai").length;
-    const chartCount = userEntries.filter((e) => e.type === "chart").length;
-    const summaryCount = userEntries.filter((e) => e.type === "summary").length;
-    return { total, aiCount, chartCount, summaryCount };
+    const completed = userEntries.filter((e) => (e.status || "Completed") === "Completed").length;
+    const totalCharts = userEntries.reduce((sum, e) => {
+      const count = e.chartCount || e.chartConfigurations?.length || (e.chart?.columns?.length ? 1 : 0);
+      return sum + (Number.isFinite(count) ? count : 0);
+    }, 0);
+    const totalInsights = userEntries.reduce((sum, e) => {
+      const count = e.insightsCount || e.savedInsights?.length || (e.response ? 1 : 0);
+      return sum + (Number.isFinite(count) ? count : 0);
+    }, 0);
+    return { total, completed, totalCharts, totalInsights };
   }, [userEntries]);
 
-  const handleCopy = (text, id) => {
-    if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    toast.success("Copied to clipboard!");
-    setTimeout(() => {
-      setCopiedId((current) => (current === id ? null : current));
-    }, 2000);
-  };
+  const handleOpenInStudio = (entry) => {
+    const entryId = getValidEntryId(entry);
+    const dataToRestore = Array.isArray(entry.dataSnapshot) && entry.dataSnapshot.length > 0
+      ? entry.dataSnapshot
+      : [];
 
-  const handleExportCsv = (entry) => {
-    const csv = exportHistoryTableAsCsv(entry);
-    if (!csv) {
-      toast.warning("No table rows available to export.");
-      return;
+    if (dataToRestore.length > 0) {
+      dispatch(
+        setExcelData({
+          data: dataToRestore,
+          fileName: entry.fileName || entry.title,
+          sheetNames: entry.sheetNames || [],
+          activeSheet: entry.selectedSheet || entry.sheetNames?.[0] || "",
+          analysisId: entryId,
+        })
+      );
+      if (typeof window !== "undefined") {
+        try {
+          sessionStorage.setItem("excel_data", JSON.stringify(dataToRestore));
+          sessionStorage.setItem("excel_filename", entry.fileName || entry.title);
+          if (entryId) {
+            sessionStorage.setItem("excel_analysis_id", entryId);
+          }
+        } catch (e) {
+          console.warn("Could not save to session storage:", e);
+        }
+      }
+      toast.success(`Restored "${entry.fileName || entry.title}" in Visualizations Studio`);
+      router.push("/tabSection");
+    } else if (entryId) {
+      router.push(`/history/${encodeURIComponent(entryId)}`);
+    } else {
+      toast.warning("This analysis does not have a valid saved ID to reopen.");
     }
-    const filename = `${(entry.title || "chart_data").replace(/[^a-z0-9_-]/gi, "_")}.csv`;
-    downloadBlob(csv, filename, "text/csv;charset=utf-8;");
-    toast.success("CSV exported successfully!");
   };
 
-  const handleExportMarkdown = (entry) => {
-    const md = exportHistoryAsMarkdown(entry);
-    const filename = `${(entry.title || "analysis").replace(/[^a-z0-9_-]/gi, "_")}.md`;
-    downloadBlob(md, filename, "text/markdown;charset=utf-8;");
-    toast.success("Markdown exported successfully!");
-  };
-
-  const handleDelete = (id, title) => {
+  const handleDelete = (id, fileName) => {
     deleteAnalysisHistory(dispatch, id, isAuthenticated);
-    toast.info(`Deleted "${title || "analysis entry"}"`);
+    setEntryToDelete(null);
+    toast.info(`Deleted analysis "${fileName || "entry"}"`);
   };
 
   const handleClearAll = () => {
     clearAllAnalysisHistory(dispatch, userId, isAuthenticated);
     setShowClearConfirm(false);
-    toast.success("All analysis history cleared.");
-  };
-
-  const toggleExpand = (id) => {
-    setExpandedCards((prev) => ({
-      ...prev,
-      [id]: !prev[id],
-    }));
+    toast.success("All analysis history records cleared.");
   };
 
   return (
@@ -136,35 +178,28 @@ export default function AnalysisHistory({ userId }) {
       {/* Top Header Card */}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600">
-                <Clock className="h-5 w-5" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-slate-900">Analysis History</h1>
-                <p className="text-xs text-slate-500">
-                  Comprehensive audit trail of AI insights, charts, and summary statistics.
-                </p>
-              </div>
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-600 border border-amber-200/50">
+              <Clock className="h-6 w-6" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900">Analysis History</h1>
+              <p className="text-xs text-slate-500">
+                Persistent log of uploaded workbooks, charts, and generated AI insights.
+              </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* Sync Status Badge */}
+            {/* Sync Badge */}
             <div
-              className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
+              className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
                 syncStatus === "syncing"
                   ? "bg-amber-50 text-amber-700 border border-amber-200"
                   : isAuthenticated
                   ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                   : "bg-slate-100 text-slate-600 border border-slate-200"
               }`}
-              title={
-                isAuthenticated
-                  ? "History is saved to your account and persistent across devices"
-                  : "History is saved locally in your browser"
-              }
             >
               {syncStatus === "syncing" ? (
                 <>
@@ -184,29 +219,28 @@ export default function AnalysisHistory({ userId }) {
               )}
             </div>
 
-            {/* Refresh from cloud button */}
+            {/* Refresh Button */}
             {isAuthenticated && (
               <button
                 type="button"
                 onClick={() => fetchUserHistory(dispatch)}
                 disabled={loading}
-                className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-                title="Refresh history from cloud"
+                className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 transition cursor-pointer"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin text-indigo-600" : ""}`} />
                 <span>Refresh</span>
               </button>
             )}
 
-            {/* Clear history button */}
+            {/* Clear history */}
             <button
               type="button"
               onClick={() => setShowClearConfirm(true)}
               disabled={userEntries.length === 0}
-              className="flex items-center gap-1.5 rounded-xl border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40 transition"
+              className="flex items-center gap-1.5 rounded-xl border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40 transition cursor-pointer"
             >
               <Trash2 className="h-3.5 w-3.5" />
-              <span>Clear history</span>
+              <span>Clear History</span>
             </button>
           </div>
         </div>
@@ -214,162 +248,164 @@ export default function AnalysisHistory({ userId }) {
         {/* Analytics Statistics Row */}
         <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
-            <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Total Saved</span>
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Total Analyses</span>
             <div className="mt-1 text-2xl font-bold text-slate-900">{stats.total}</div>
           </div>
-          <div className="rounded-xl border border-purple-100 bg-purple-50/50 p-3.5">
-            <span className="text-[11px] font-medium text-purple-700 uppercase tracking-wider flex items-center gap-1">
-              <Sparkles className="h-3 w-3" /> AI Insights
+          <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3.5">
+            <span className="text-[11px] font-semibold text-emerald-700 uppercase tracking-wider flex items-center gap-1">
+              <CheckCircle2 className="h-3 w-3" /> Completed
             </span>
-            <div className="mt-1 text-2xl font-bold text-purple-900">{stats.aiCount}</div>
+            <div className="mt-1 text-2xl font-bold text-emerald-900">{stats.completed}</div>
           </div>
           <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3.5">
-            <span className="text-[11px] font-medium text-blue-700 uppercase tracking-wider flex items-center gap-1">
-              <BarChart3 className="h-3 w-3" /> Charts
+            <span className="text-[11px] font-semibold text-blue-700 uppercase tracking-wider flex items-center gap-1">
+              <BarChart3 className="h-3 w-3" /> Saved Charts
             </span>
-            <div className="mt-1 text-2xl font-bold text-blue-900">{stats.chartCount}</div>
+            <div className="mt-1 text-2xl font-bold text-blue-900">{stats.totalCharts}</div>
           </div>
-          <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3.5">
-            <span className="text-[11px] font-medium text-emerald-700 uppercase tracking-wider flex items-center gap-1">
-              <Table className="h-3 w-3" /> Summaries
+          <div className="rounded-xl border border-purple-100 bg-purple-50/50 p-3.5">
+            <span className="text-[11px] font-semibold text-purple-700 uppercase tracking-wider flex items-center gap-1">
+              <Sparkles className="h-3 w-3" /> AI Insights
             </span>
-            <div className="mt-1 text-2xl font-bold text-emerald-900">{stats.summaryCount}</div>
+            <div className="mt-1 text-2xl font-bold text-purple-900">{stats.totalInsights}</div>
           </div>
         </div>
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        {/* Category Pill Filters */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {[
-            { id: "all", label: "All Items", count: stats.total },
-            { id: "ai", label: "AI Insights", count: stats.aiCount, icon: Sparkles },
-            { id: "chart", label: "Charts", count: stats.chartCount, icon: BarChart3 },
-            { id: "summary", label: "Summaries", count: stats.summaryCount, icon: Table },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const active = activeFilter === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => {
-                  setActiveFilter(tab.id);
-                  setVisibleCount(10);
-                }}
-                className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
-                  active
-                    ? "bg-indigo-600 text-white shadow-sm"
-                    : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                {Icon && <Icon className="h-3.5 w-3.5" />}
-                <span>{tab.label}</span>
-                <span
-                  className={`ml-1 rounded-full px-1.5 py-0.2 text-[10px] ${
-                    active ? "bg-indigo-700 text-white" : "bg-slate-100 text-slate-600"
-                  }`}
-                >
-                  {tab.count}
-                </span>
-              </button>
-            );
-          })}
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        {/* Search */}
+        <div className="relative flex-1 md:max-w-xs">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search by filename or sheet..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
         </div>
 
-        {/* Search & Sort Controls */}
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1 sm:w-64">
-            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search history..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 bg-white py-1.5 pl-9 pr-3 text-xs text-slate-800 placeholder-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-          </div>
+        {/* Dropdown Filters */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Status Filter */}
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:border-indigo-500 focus:outline-none"
+          >
+            <option value="all">All Statuses</option>
+            <option value="Completed">Completed</option>
+            <option value="Processing">Processing</option>
+            <option value="Failed">Failed</option>
+          </select>
 
+          {/* File Type Filter */}
+          <select
+            value={fileTypeFilter}
+            onChange={(e) => setFileTypeFilter(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:border-indigo-500 focus:outline-none"
+          >
+            <option value="all">All File Types</option>
+            <option value="xlsx">XLSX</option>
+            <option value="xls">XLS</option>
+            <option value="csv">CSV</option>
+          </select>
+
+          {/* Sort Filter */}
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 focus:border-indigo-500 focus:outline-none"
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:border-indigo-500 focus:outline-none"
           >
-            <option value="newest">Newest first</option>
-            <option value="oldest">Oldest first</option>
-            <option value="rows">Most rows</option>
+            <option value="newest">Newest First</option>
+            <option value="oldest">Oldest First</option>
           </select>
         </div>
       </div>
 
-      {/* Entry Feed */}
-      {filteredEntries.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
-            <Clock className="h-7 w-7" />
+      {/* Loading Skeletons */}
+      {loading && userEntries.length === 0 ? (
+        <div className="space-y-4">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="animate-pulse rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex justify-between items-start">
+                <div className="space-y-2">
+                  <div className="h-5 w-48 bg-slate-200 rounded" />
+                  <div className="h-3 w-64 bg-slate-100 rounded" />
+                </div>
+                <div className="h-8 w-24 bg-slate-100 rounded-xl" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : filteredEntries.length === 0 ? (
+        /* Empty State */
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center shadow-xs">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 mb-4">
+            <FileSpreadsheet className="h-7 w-7" />
           </div>
-          <h3 className="mt-4 text-base font-bold text-slate-900">
-            {searchQuery || activeFilter !== "all"
-              ? "No matching analysis entries"
-              : "No analysis history recorded yet"}
+          <h3 className="text-base font-bold text-slate-900">
+            {searchQuery || statusFilter !== "all" || fileTypeFilter !== "all"
+              ? "No analyses match your criteria"
+              : "No Analysis History Yet"}
           </h3>
           <p className="mt-1 text-xs text-slate-500 max-w-md mx-auto">
-            {searchQuery || activeFilter !== "all"
-              ? "Try adjusting your search criteria or switching filter tabs."
-              : "Create interactive 2D/3D charts or generate Gemini AI insights from your spreadsheets to build your analysis timeline."}
+            {searchQuery || statusFilter !== "all" || fileTypeFilter !== "all"
+              ? "Try resetting your search query or switching your filters."
+              : "Upload an Excel workbook to start analyzing data, creating charts, and generating AI insights."}
           </p>
           <div className="mt-5 flex justify-center gap-3">
             <Link
-              href="/tabSection"
-              className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 transition"
+              href="/upload"
+              className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 transition"
             >
-              Create Charts
-            </Link>
-            <Link
-              href="/ai"
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
-            >
-              Ask Gemini
+              Upload Excel File
             </Link>
           </div>
         </div>
       ) : (
+        /* Order History List (Amazon/Flipkart Style Cards) */
         <div className="space-y-4">
-          {filteredEntries.slice(0, visibleCount).map((entry) => {
-            const isAi = entry.type === "ai";
-            const isChart = entry.type === "chart";
-            const isSummary = entry.type === "summary";
-            const isExpanded = expandedCards[entry.id];
-            const longResponse = isAi && (entry.response?.length || 0) > 350;
+          {filteredEntries.slice(0, visibleCount).map((entry, entryIndex) => {
+            const entryId = getValidEntryId(entry);
+            const status = entry.status || "Completed";
+            const rowCount = entry.rowCount ?? (entry.dataSnapshot?.length ? entry.dataSnapshot.length - 1 : 0);
+            const colCount = entry.columnCount ?? (entry.columns?.length || 0);
+            const chartCount = entry.chartCount ?? (entry.chartConfigurations?.length || (entry.chart?.columns?.length ? 1 : 0));
+            const hasAi = entry.hasAiInsights || (entry.savedInsights?.length > 0) || entry.type === "ai" || Boolean(entry.response);
 
             return (
               <article
-                key={entry.id || entry._id}
-                className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-slate-300 hover:shadow-md"
+                key={entryId || `entry-${entryIndex}`}
+                className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm hover:border-indigo-300 hover:shadow-md transition"
               >
-                {/* Header line of card */}
-                <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  {/* Left Column: Title & Meta */}
                   <div className="min-w-0 flex-1">
-                    <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                      {isAi && (
-                        <span className="flex items-center gap-1 rounded-full bg-purple-50 px-2.5 py-0.5 text-[11px] font-semibold text-purple-700">
-                          <Sparkles className="h-3 w-3" />
-                          Gemini Insight
-                        </span>
-                      )}
-                      {isChart && (
-                        <span className="flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700">
-                          <BarChart3 className="h-3 w-3" />
-                          {entry.chart?.chartType || "Chart Snapshot"}
-                        </span>
-                      )}
-                      {isSummary && (
-                        <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700">
-                          <Table className="h-3 w-3" />
-                          Statistics Summary
-                        </span>
-                      )}
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-bold uppercase text-slate-700">
+                        {entry.fileType || "XLSX"}
+                      </span>
+
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold flex items-center gap-1 ${
+                          status === "Completed"
+                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                            : status === "Processing"
+                            ? "bg-amber-50 text-amber-700 border border-amber-200"
+                            : "bg-red-50 text-red-700 border border-red-200"
+                        }`}
+                      >
+                        {status === "Completed" ? (
+                          <CheckCircle2 className="h-3 w-3" />
+                        ) : status === "Failed" ? (
+                          <XCircle className="h-3 w-3" />
+                        ) : (
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                        )}
+                        <span>{status}</span>
+                      </span>
 
                       <span className="text-[11px] text-slate-400">
                         {entry.createdAt && Number.isFinite(Date.parse(entry.createdAt))
@@ -380,190 +416,118 @@ export default function AnalysisHistory({ userId }) {
                               hour: "2-digit",
                               minute: "2-digit",
                             })
-                          : "Saved recently"}
+                          : "Saved"}
                       </span>
                     </div>
 
-                    <h2 className="text-base font-bold text-slate-900 group-hover:text-indigo-600 transition">
-                      {entry.title}
-                    </h2>
+                    {/* Clickable Title that reopens detail */}
+                    {entryId ? (
+                      <Link
+                        href={`/history/${encodeURIComponent(entryId)}`}
+                        className="group/link flex items-center gap-1.5"
+                      >
+                        <h2 className="text-base font-bold text-slate-900 group-hover/link:text-indigo-600 transition">
+                          {entry.fileName || entry.title || "Workbook Analysis"}
+                        </h2>
+                        <ChevronRight className="h-4 w-4 text-slate-300 group-hover/link:text-indigo-600 group-hover/link:translate-x-0.5 transition" />
+                      </Link>
+                    ) : (
+                      <h2 className="text-base font-bold text-slate-900">
+                        {entry.fileName || entry.title || "Workbook Analysis"}
+                      </h2>
+                    )}
 
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                      <span className="flex items-center gap-1">
-                        <FileSpreadsheet className="h-3.5 w-3.5 text-slate-400" />
-                        {entry.datasetName || "Uploaded dataset"}
+                    {/* Key Attributes Row */}
+                    <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">
+                      <span>
+                        Records: <strong className="font-semibold text-slate-800">{rowCount.toLocaleString()}</strong>
                       </span>
-                      {Number.isFinite(entry.rowCount) && entry.rowCount > 0 && (
-                        <span>· {entry.rowCount.toLocaleString()} rows</span>
+                      {colCount > 0 && (
+                        <span>
+                          Columns: <strong className="font-semibold text-slate-800">{colCount}</strong>
+                        </span>
                       )}
+                      <span>
+                        Charts: <strong className="font-semibold text-blue-700">{chartCount}</strong>
+                      </span>
+                      <span>
+                        AI Insights:{" "}
+                        <strong className={`font-semibold ${hasAi ? "text-purple-700" : "text-slate-400"}`}>
+                          {hasAi ? "Available" : "None"}
+                        </strong>
+                      </span>
                     </div>
+
+                    {/* Worksheets Badges */}
+                    {entry.sheetNames && entry.sheetNames.length > 0 && (
+                      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                          <Layers className="h-3 w-3" /> Sheets:
+                        </span>
+                        {entry.sheetNames.slice(0, 4).map((sheet, sIdx) => (
+                          <span
+                            key={sIdx}
+                            className="rounded-md bg-slate-50 border border-slate-200/80 px-2 py-0.5 text-[10px] font-medium text-slate-600"
+                          >
+                            {sheet}
+                          </span>
+                        ))}
+                        {entry.sheetNames.length > 4 && (
+                          <span className="text-[10px] text-slate-400">
+                            +{entry.sheetNames.length - 4} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Error message if Failed */}
+                    {entry.errorMessage && (
+                      <div className="mt-2 text-xs text-red-600 bg-red-50 p-2 rounded-lg border border-red-100">
+                        Error: {entry.errorMessage}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Actions right */}
-                  <div className="flex items-center gap-1">
-                    {/* Markdown Export for AI */}
-                    {isAi && (
+                  {/* Actions Right */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {entryId ? (
+                      <Link
+                        href={`/history/${encodeURIComponent(entryId)}`}
+                        className="flex items-center gap-1 rounded-xl bg-indigo-50 px-3.5 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition cursor-pointer"
+                      >
+                        <span>View Analysis</span>
+                      </Link>
+                    ) : (
                       <button
                         type="button"
-                        onClick={() => handleExportMarkdown(entry)}
-                        title="Download Markdown"
-                        className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 hover:text-indigo-600 transition"
+                        disabled
+                        className="flex items-center gap-1 rounded-xl bg-slate-100 px-3.5 py-2 text-xs font-semibold text-slate-400 cursor-not-allowed"
+                        title="ID unavailable"
                       >
-                        <Download className="h-3.5 w-3.5" />
+                        <span>View Analysis</span>
                       </button>
                     )}
 
-                    {/* CSV Export for Charts or Summaries */}
-                    {(isChart || isSummary) && entry.chart?.columns?.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => handleExportCsv(entry)}
-                        title="Export Table as CSV"
-                        className="flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50/50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition"
-                      >
-                        <Download className="h-3 w-3" />
-                        <span>Export CSV</span>
-                      </button>
-                    )}
-
-                    {/* Delete Item */}
                     <button
                       type="button"
-                      aria-label={`Delete ${entry.title} from history`}
-                      onClick={() => handleDelete(entry.id || entry._id, entry.title)}
-                      className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 transition"
+                      onClick={() => handleOpenInStudio(entry)}
+                      className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition cursor-pointer"
+                      title="Open dataset in visualization studio"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5 text-slate-500" />
+                      <span>Studio</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      aria-label="Delete analysis"
+                      onClick={() => setEntryToDelete(entry)}
+                      className="rounded-xl border border-slate-200 p-2 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600 transition cursor-pointer"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
-
-                {/* AI Query Prompt Box */}
-                {entry.prompt && (
-                  <div className="mt-3 flex items-start justify-between gap-2 rounded-xl bg-slate-50 p-3 text-xs text-slate-700 border border-slate-100">
-                    <div>
-                      <span className="font-semibold text-slate-900">Question: </span>
-                      <span>{entry.prompt}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleCopy(entry.prompt, `prompt-${entry.id}`)}
-                      title="Copy Question"
-                      className="text-slate-400 hover:text-indigo-600 transition"
-                    >
-                      {copiedId === `prompt-${entry.id}` ? (
-                        <Check className="h-3.5 w-3.5 text-emerald-600" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* AI Insight Response Box */}
-                {entry.response && (
-                  <div className="mt-3 rounded-xl bg-purple-50/60 p-4 border border-purple-100/70">
-                    <div className="flex items-center justify-between mb-2 pb-2 border-b border-purple-100 text-[11px] font-semibold text-purple-900">
-                      <span className="flex items-center gap-1.5">
-                        <Sparkles className="h-3.5 w-3.5 text-purple-600" />
-                        Gemini Response
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleCopy(entry.response, `resp-${entry.id}`)}
-                        className="flex items-center gap-1 text-purple-700 hover:text-purple-900 transition"
-                      >
-                        {copiedId === `resp-${entry.id}` ? (
-                          <>
-                            <Check className="h-3 w-3 text-emerald-600" />
-                            <span className="text-[10px]">Copied!</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="h-3 w-3" />
-                            <span className="text-[10px]">Copy text</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-
-                    <div
-                      className={`whitespace-pre-wrap text-xs leading-relaxed text-slate-800 ${
-                        longResponse && !isExpanded ? "max-h-36 overflow-hidden relative" : ""
-                      }`}
-                    >
-                      {entry.response}
-                      {longResponse && !isExpanded && (
-                        <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-purple-50/90 to-transparent pointer-events-none" />
-                      )}
-                    </div>
-
-                    {longResponse && (
-                      <button
-                        type="button"
-                        onClick={() => toggleExpand(entry.id)}
-                        className="mt-2 flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800"
-                      >
-                        {isExpanded ? (
-                          <>
-                            <ChevronUp className="h-3.5 w-3.5" /> Show less
-                          </>
-                        ) : (
-                          <>
-                            <ChevronDown className="h-3.5 w-3.5" /> Show full response
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Table Data Preview for Charts & Summaries */}
-                {entry.chart && Array.isArray(entry.chart.columns) && Array.isArray(entry.chart.rows) && (
-                  <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
-                    <div className="max-h-60 overflow-x-auto overflow-y-auto">
-                      <table className="min-w-full text-left text-xs">
-                        <thead className="sticky top-0 bg-slate-50 text-slate-700 border-b border-slate-200">
-                          <tr>
-                            {entry.chart.columns.map((column, index) => (
-                              <th
-                                key={`${column}-${index}`}
-                                className="whitespace-nowrap px-3.5 py-2 font-semibold"
-                              >
-                                {column}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 bg-white">
-                          {entry.chart.rows.slice(0, 10).map((row, rowIndex) => (
-                            <tr key={rowIndex} className="hover:bg-slate-50/70 transition">
-                              {row.map((value, columnIndex) => (
-                                <td key={columnIndex} className="whitespace-nowrap px-3.5 py-1.5 text-slate-700">
-                                  {value === null || value === undefined ? "—" : String(value)}
-                                </td>
-                              ))}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50/60 px-3.5 py-2 text-[11px] text-slate-500">
-                      <span>
-                        Showing {Math.min(10, entry.chart.rows.length)} of {entry.chart.totalRows || entry.chart.rows.length} rows
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleExportCsv(entry)}
-                        className="font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
-                      >
-                        <Download className="h-3 w-3" />
-                        Download complete CSV
-                      </button>
-                    </div>
-                  </div>
-                )}
               </article>
             );
           })}
@@ -573,8 +537,8 @@ export default function AnalysisHistory({ userId }) {
             <div className="pt-2 text-center">
               <button
                 type="button"
-                onClick={() => setVisibleCount((prev) => prev + 10)}
-                className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition"
+                onClick={() => setVisibleCount((prev) => prev + 15)}
+                className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 transition cursor-pointer"
               >
                 Load more ({filteredEntries.length - visibleCount} remaining)
               </button>
@@ -583,7 +547,43 @@ export default function AnalysisHistory({ userId }) {
         </div>
       )}
 
-      {/* Confirmation Modal for Clear All */}
+      {/* Delete Single Entry Confirmation Modal */}
+      {entryToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-slate-200">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-100 text-red-600">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Delete Analysis?</h3>
+                <p className="text-xs text-slate-500">
+                  Permanently remove &ldquo;{entryToDelete.fileName || entryToDelete.title}&rdquo; from your account?
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setEntryToDelete(null)}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDelete(entryToDelete.id || entryToDelete._id, entryToDelete.fileName || entryToDelete.title)}
+                className="rounded-xl bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-red-700 transition cursor-pointer"
+              >
+                Yes, Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear All Confirmation Modal */}
       {showClearConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-slate-200">
@@ -592,9 +592,9 @@ export default function AnalysisHistory({ userId }) {
                 <AlertCircle className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-slate-900">Clear Analysis History?</h3>
+                <h3 className="text-base font-bold text-slate-900">Clear Entire History?</h3>
                 <p className="text-xs text-slate-500">
-                  This will permanently remove all {userEntries.length} saved analysis entries from your account.
+                  This will permanently delete all {userEntries.length} saved analyses and their charts.
                 </p>
               </div>
             </div>
@@ -603,14 +603,14 @@ export default function AnalysisHistory({ userId }) {
               <button
                 type="button"
                 onClick={() => setShowClearConfirm(false)}
-                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleClearAll}
-                className="rounded-xl bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-red-700 transition"
+                className="rounded-xl bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-red-700 transition cursor-pointer"
               >
                 Yes, Clear All
               </button>

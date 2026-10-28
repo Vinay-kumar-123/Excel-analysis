@@ -22,9 +22,8 @@ import {
   Sparkles,
   SlidersHorizontal,
 } from "lucide-react";
-import { createAnalysisDedupeKey, createAnalysisEntry } from "@/lib/analysisHistory.mjs";
 import { addHistoryEntry } from "@/redux/historySlice";
-import { saveAnalysisHistory } from "@/lib/historyService";
+import { saveChartToAnalysis, updateAnalysisSummary } from "@/lib/historyService";
 import AnalysisHistory from "@/components/AnalysisHistory";
 
 // 2D Chart Components (fast client bundle)
@@ -108,6 +107,9 @@ function TabSectionContent() {
   const historyEntries = useSelector((state) => state.history?.entries || []);
   const user = useSelector((state) => state.auth?.user);
   const userId = String(user?._id || user?.id || "anonymous");
+  const currentAnalysisId =
+    reduxExcel?.analysisId ||
+    (typeof window !== "undefined" ? sessionStorage.getItem("excel_analysis_id") : null);
 
   const initialTabParam = searchParams.get("tab")?.toUpperCase();
   const validTabs = ["2D", "3D", "SUMMARY", "AI", "HISTORY"];
@@ -394,20 +396,6 @@ function TabSectionContent() {
     };
   }, [rows, xAxisCol, zAxisCol, selectedZType, headers]);
 
-  const saveHistoryEntry = (details) => {
-    const entryDetails = {
-      ...details,
-      userId,
-      datasetName: fileName || "Uploaded dataset",
-      rowCount: rows.length,
-    };
-    if (details.type === "chart" || details.type === "summary") {
-      entryDetails.dedupeKey = createAnalysisDedupeKey(entryDetails);
-    }
-    const entry = createAnalysisEntry(entryDetails);
-    saveAnalysisHistory(dispatch, entry, Boolean(user));
-  };
-
   const saveChartHistory = () => {
     const title = getChartTitle(
       active2DType,
@@ -419,18 +407,34 @@ function TabSectionContent() {
     const chartRows = chart2DResult.data.labels?.length
       ? chart2DResult.data.labels.map((label, index) => [label, dataset?.data?.[index]])
       : (dataset?.data || []).map((point) => [point.label || "", point.x, point.y, point.sizeValue ?? point.r ?? ""]);
-    saveHistoryEntry({
-      type: "chart",
-      title,
-      chart: {
-        chartType: active2DType,
-        columns: chart2DResult.data.labels?.length
-          ? [displayColumnLabel(headers[xAxisCol]), displayColumnLabel(headers[yAxisCol])]
-          : ["Record", displayColumnLabel(headers[xAxisCol]), displayColumnLabel(headers[yAxisCol]), active2DType === "Bubble" ? displayColumnLabel(headers[sizeAxisCol]) : "Size"],
-        rows: chartRows.slice(0, 200),
-        totalRows: chartRows.length,
-      },
-    });
+
+    // Update the active workbook record's chart configurations without creating a standalone history entry
+    if (currentAnalysisId) {
+      saveChartToAnalysis(
+        dispatch,
+        currentAnalysisId,
+        {
+          id: `chart-2d-${active2DType}`,
+          chartType: active2DType,
+          title,
+          xAxisCol,
+          yAxisCol,
+          sizeAxisCol,
+          xLabel: displayColumnLabel(headers[xAxisCol]),
+          yLabel: displayColumnLabel(headers[yAxisCol]),
+          sizeLabel: displayColumnLabel(headers[sizeAxisCol]),
+          worksheet: reduxExcel?.activeSheet,
+          chartData: {
+            columns: chart2DResult.data.labels?.length
+              ? [displayColumnLabel(headers[xAxisCol]), displayColumnLabel(headers[yAxisCol])]
+              : ["Record", displayColumnLabel(headers[xAxisCol]), displayColumnLabel(headers[yAxisCol]), active2DType === "Bubble" ? displayColumnLabel(headers[sizeAxisCol]) : "Size"],
+            rows: chartRows.slice(0, 200),
+            totalRows: chartRows.length,
+          },
+        },
+        Boolean(user)
+      );
+    }
   };
 
   const save3DChartHistory = () => {
@@ -458,26 +462,59 @@ function TabSectionContent() {
         ...(active3DType === "Bubble3D" ? [chart3DProps.sizeValues[index]] : []),
       ]);
     }
-    saveHistoryEntry({
-      type: "chart",
-      title: `${active3DType}: ${columns.join(" / ")}`,
-      chart: { chartType: active3DType, columns, rows: chartRows.slice(0, 200), totalRows: chartRows.length },
-    });
+
+    // Update the active workbook record's chart configurations without creating a standalone history entry
+    if (currentAnalysisId) {
+      saveChartToAnalysis(
+        dispatch,
+        currentAnalysisId,
+        {
+          id: `chart-3d-${active3DType}`,
+          chartType: active3DType,
+          title: `${active3DType}: ${columns.join(" / ")}`,
+          xAxisCol,
+          yAxisCol,
+          zAxisCol,
+          sizeAxisCol,
+          xLabel: displayColumnLabel(headers[xAxisCol]),
+          yLabel: displayColumnLabel(headers[yAxisCol]),
+          zLabel: displayColumnLabel(headers[zAxisCol]),
+          sizeLabel: displayColumnLabel(headers[sizeAxisCol]),
+          worksheet: reduxExcel?.activeSheet,
+          chartData: {
+            columns,
+            rows: chartRows.slice(0, 200),
+            totalRows: chartRows.length,
+          },
+        },
+        Boolean(user)
+      );
+    }
   };
 
   const saveSummaryHistory = () => {
-    saveHistoryEntry({
-      type: "summary",
-      title: `Statistics summary for ${fileName || "uploaded dataset"}`,
-      chart: {
-        chartType: "Summary",
-        columns: ["Column", "Type", "Valid rows", "Sum", "Average", "Minimum", "Maximum"],
-        rows: summaryStats.map((item) => [
-          item.header, item.type, item.count, item.sum, item.mean, item.min, item.max,
-        ]),
-        totalRows: summaryStats.length,
-      },
-    });
+    // Update summary statistics on the active workbook record without creating a standalone history entry
+    if (currentAnalysisId) {
+      updateAnalysisSummary(dispatch, currentAnalysisId, summaryStats, Boolean(user));
+      saveChartToAnalysis(
+        dispatch,
+        currentAnalysisId,
+        {
+          id: "summary-statistics",
+          chartType: "Summary",
+          title: `Statistics summary for ${fileName || "uploaded dataset"}`,
+          worksheet: reduxExcel?.activeSheet,
+          chartData: {
+            columns: ["Column", "Type", "Valid rows", "Sum", "Average", "Minimum", "Maximum"],
+            rows: summaryStats.map((item) => [
+              item.header, item.type, item.count, item.sum, item.mean, item.min, item.max,
+            ]),
+            totalRows: summaryStats.length,
+          },
+        },
+        Boolean(user)
+      );
+    }
   };
 
   // Compute Summary Statistics ONLY when SUMMARY tab is viewed

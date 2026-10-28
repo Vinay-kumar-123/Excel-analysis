@@ -5,12 +5,15 @@ import { Upload as UploadIcon, FileSpreadsheet, Eye } from "lucide-react";
 import { motion } from "framer-motion";
 import ExcelPreview from "@/components/ExcelPreview";
 import AuthGuard from "@/components/AuthGuard";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { setExcelData } from "@/redux/excelSlice";
 import { toast } from "react-toastify";
+import { inferColumnTypes } from "@/lib/chartData.mjs";
+import { createAnalysisRecord } from "@/lib/historyService";
 
 function UploadContent() {
   const dispatch = useDispatch();
+  const authUser = useSelector((state) => state.auth?.user);
   const [file, setFile] = useState(null);
   const [excelData, setExcelDataLocal] = useState([]);
   const [filename, setFilename] = useState("");
@@ -46,7 +49,7 @@ function UploadContent() {
     setIsProcessing(true);
     const reader = new FileReader();
 
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const data = new Uint8Array(e.target.result);
         const workbook = XLSX.read(data, { type: "array" });
@@ -58,6 +61,50 @@ function UploadContent() {
         const jsonData = parseSheet(workbook, defaultSheet);
         setExcelDataLocal(jsonData);
 
+        const rawHeaders = (jsonData[0] || []).map((h, idx) =>
+          h !== undefined && h !== null && String(h).trim() !== "" ? String(h) : `Column ${idx + 1}`
+        );
+        const rawRows = jsonData.slice(1);
+        const columnInferences = inferColumnTypes(rawHeaders, rawRows);
+        const columnsMeta = columnInferences.map((col) => ({
+          header: col.header,
+          type: col.type,
+        }));
+
+        // Persist analysis record in MongoDB for authenticated accounts
+        const clientEntryId =
+          globalThis.crypto?.randomUUID?.() ||
+          `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        let createdAnalysisId = clientEntryId;
+
+        try {
+          const created = await createAnalysisRecord(
+            dispatch,
+            {
+              id: clientEntryId,
+              clientEntryId,
+              fileName: file.name,
+              fileType: file.name.split(".").pop()?.toLowerCase() || "xlsx",
+              fileSize: file.size || 0,
+              status: "Completed",
+              sheetNames: workbook.SheetNames,
+              selectedSheet: defaultSheet,
+              rowCount: Math.max(0, jsonData.length - 1),
+              columnCount: rawHeaders.length,
+              columns: columnsMeta,
+              dataSnapshot: jsonData.slice(0, 2000),
+              totalRows: jsonData.length,
+              userId: String(authUser?._id || authUser?.id || "anonymous"),
+            },
+            Boolean(authUser)
+          );
+          if (created?._id || created?.id) {
+            createdAnalysisId = created._id || created.id;
+          }
+        } catch (createErr) {
+          console.warn("Could not save initial analysis record:", createErr);
+        }
+
         // Store in Redux and sessionStorage
         dispatch(
           setExcelData({
@@ -65,6 +112,7 @@ function UploadContent() {
             fileName: file.name,
             sheetNames: workbook.SheetNames,
             activeSheet: defaultSheet,
+            analysisId: createdAnalysisId,
           })
         );
 
@@ -72,6 +120,9 @@ function UploadContent() {
           if (typeof window !== "undefined") {
             sessionStorage.setItem("excel_data", JSON.stringify(jsonData));
             sessionStorage.setItem("excel_filename", file.name);
+            if (createdAnalysisId) {
+              sessionStorage.setItem("excel_analysis_id", createdAnalysisId);
+            }
           }
         } catch (storageError) {
           console.warn("Could not persist the uploaded workbook in session storage:", storageError);
@@ -81,6 +132,21 @@ function UploadContent() {
         toast.success(`Successfully parsed "${file.name}" with ${jsonData.length} rows`);
       } catch (err) {
         console.error("Excel parse error:", err);
+        // Log a failed history record if possible
+        if (authUser) {
+          createAnalysisRecord(
+            dispatch,
+            {
+              fileName: file.name,
+              fileType: file.name.split(".").pop()?.toLowerCase() || "xlsx",
+              fileSize: file.size || 0,
+              status: "Failed",
+              errorMessage: err.message || "Failed to parse workbook",
+              userId: String(authUser?._id || authUser?.id || "anonymous"),
+            },
+            true
+          ).catch(() => {});
+        }
         toast.error("Failed to read the Excel file. Please ensure it's a valid .xlsx or .xls file.");
       } finally {
         setIsProcessing(false);

@@ -4,12 +4,12 @@ import { useSelector, useDispatch } from "react-redux";
 import { setAiAnalysis } from "@/redux/excelSlice";
 import { logoutUser } from "@/redux/authSlice";
 import { addHistoryEntry } from "@/redux/historySlice";
-import { saveAnalysisHistory } from "@/lib/historyService";
+import { attachInsightToAnalysis } from "@/lib/historyService";
 import api from "@/lib/api";
-import { createAnalysisEntry } from "@/lib/analysisHistory.mjs";
 import { toast } from "react-toastify";
 import Link from "next/link";
 import AuthGuard from "@/components/AuthGuard";
+import GeminiReport from "@/components/GeminiReport";
 import { useRouter } from "next/navigation";
 import {
   Sparkles,
@@ -36,7 +36,6 @@ function AiPageContent() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState(reduxExcel?.aiAnalysis || "");
-  const [copied, setCopied] = useState(false);
 
   // Restore dataset from Redux or sessionStorage
   useEffect(() => {
@@ -121,16 +120,19 @@ function AiPageContent() {
       if (!reply) throw new Error("The AI service returned an empty answer. Please try a more specific question.");
       setResponse(reply);
       dispatch(setAiAnalysis(reply));
-      const historyItem = createAnalysisEntry({
-        type: "ai",
-        title: promptToSend.length > 90 ? `${promptToSend.slice(0, 87)}...` : promptToSend,
-        prompt: promptToSend,
-        response: reply,
-        datasetName: fileName || "Uploaded dataset",
-        rowCount: Math.max(0, dataset.length - 1),
-        userId: String(user?._id || user?.id || "anonymous"),
-      });
-      saveAnalysisHistory(dispatch, historyItem, Boolean(user));
+
+      // Attach insight strictly to the active workbook analysis without creating a separate history document
+      const currentAnalysisId =
+        reduxExcel?.analysisId ||
+        (typeof window !== "undefined" ? sessionStorage.getItem("excel_analysis_id") : null);
+      if (currentAnalysisId) {
+        attachInsightToAnalysis(
+          dispatch,
+          currentAnalysisId,
+          { query: promptToSend, response: reply },
+          Boolean(user)
+        );
+      }
     } catch (err) {
       if (err.response?.status === 401) {
         dispatch(logoutUser());
@@ -147,25 +149,6 @@ function AiPageContent() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const copyToClipboard = () => {
-    if (!response) return;
-    navigator.clipboard.writeText(response);
-    setCopied(true);
-    toast.success("Insights copied to clipboard!");
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const exportAsTxt = () => {
-    if (!response) return;
-    const blob = new Blob([response], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${fileName.replace(/\.[^/.]+$/, "")}_AI_insights.txt`;
-    link.click();
-    URL.revokeObjectURL(url);
   };
 
   return (
@@ -285,39 +268,12 @@ function AiPageContent() {
 
       {/* Response Display Box */}
       {response && (
-        <div className="bg-white rounded-2xl shadow-lg border border-purple-100 p-6 md:p-8">
-          <div className="flex items-center justify-between pb-4 mb-4 border-b border-gray-100">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 text-white flex items-center justify-center">
-                <Sparkles className="w-4 h-4" />
-              </div>
-              <h2 className="text-lg font-bold text-gray-800">Gemini Intelligence Report</h2>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={copyToClipboard}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
-                title="Copy to clipboard"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-                {copied ? "Copied" : "Copy"}
-              </button>
-              <button
-                onClick={exportAsTxt}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
-                title="Export report as text file"
-              >
-                <Download className="w-3.5 h-3.5 text-purple-600" />
-                Export
-              </button>
-            </div>
-          </div>
-
-          <div className="prose prose-purple max-w-none text-gray-700 text-sm leading-relaxed whitespace-pre-wrap font-sans">
-            {response}
-          </div>
-        </div>
+        <GeminiReport
+          response={response}
+          dataset={dataset}
+          fileName={fileName}
+          query={query}
+        />
       )}
 
       {loading && !response && (

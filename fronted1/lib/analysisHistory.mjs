@@ -1,23 +1,64 @@
 export const MAX_ANALYSIS_HISTORY = 100;
 
+export function getValidEntryId(entry) {
+  if (!entry) return null;
+  const candidates = [entry._id, entry.id, entry.clientEntryId];
+  for (const candidate of candidates) {
+    if (
+      candidate &&
+      typeof candidate === "string" &&
+      candidate !== "undefined" &&
+      candidate !== "null" &&
+      candidate.trim() !== ""
+    ) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
 export function createAnalysisEntry(details, createdAt = new Date()) {
   const dateObj = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  const resolvedId =
+    details?.id ||
+    details?._id ||
+    details?.clientEntryId ||
+    globalThis.crypto?.randomUUID?.() ||
+    `${dateObj.getTime()}-${Math.random().toString(36).slice(2, 7)}`;
   return {
     ...details,
-    id: details?.id || globalThis.crypto?.randomUUID?.() || `${dateObj.getTime()}-${Math.random().toString(36).slice(2)}`,
+    id: resolvedId,
+    clientEntryId: details?.clientEntryId || resolvedId,
     createdAt: dateObj.toISOString(),
   };
 }
 
 export function appendAnalysisEntry(entries = [], entry, limit = MAX_ANALYSIS_HISTORY) {
   if (!entry) return entries;
+  const entryId = entry.id || entry._id;
+  const clientEntryId = entry.clientEntryId;
+
   if (
     entry.dedupeKey &&
     entries.some((existing) => existing.dedupeKey === entry.dedupeKey)
   ) {
     return entries;
   }
-  return [entry, ...entries.filter((existing) => existing.id !== entry.id)].slice(0, limit);
+
+  // Filter out any matching entry by id, _id, or clientEntryId to avoid duplicates and update optimistic entries
+  const filtered = entries.filter((existing) => {
+    if (!existing) return false;
+    const existingId = existing.id || existing._id;
+    if (entryId && (existing.id === entryId || existing._id === entryId || existingId === entryId)) {
+      return false;
+    }
+    if (clientEntryId && (existing.clientEntryId === clientEntryId || existing.id === clientEntryId)) {
+      return false;
+    }
+    return true;
+  });
+
+  return [entry, ...filtered].slice(0, limit);
 }
 
 export function mergeHistoryEntries(localEntries = [], remoteEntries = [], limit = MAX_ANALYSIS_HISTORY) {
@@ -71,8 +112,24 @@ export function removeUserAnalysis(entries = [], userId) {
   return entries.filter((entry) => entry.userId !== userId);
 }
 
-export function filterAndSortHistory(entries = [], { type = "all", search = "", sort = "newest" } = {}) {
+export function isWorkbookEntry(entry) {
+  if (!entry) return false;
+  // Standalone activity records (e.g. isolated prompt questions or chart views) are not workbook entries
+  if (entry.type === "ai" || entry.type === "chart" || entry.type === "summary") {
+    return false;
+  }
+  return true;
+}
+
+export function filterAndSortHistory(
+  entries = [],
+  { type = "all", search = "", sort = "newest", onlyWorkbooks = false } = {}
+) {
   let filtered = [...entries];
+
+  if (onlyWorkbooks) {
+    filtered = filtered.filter(isWorkbookEntry);
+  }
 
   if (type && type !== "all") {
     filtered = filtered.filter((entry) => entry.type === type);

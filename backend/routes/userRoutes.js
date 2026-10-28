@@ -9,7 +9,9 @@ import {
 } from "../controllers/authController.js";
 import {
   getHistory,
+  getHistoryById,
   createHistoryEntry,
+  updateHistoryEntry,
   deleteHistoryEntry,
   clearHistory,
 } from "../controllers/historyController.js";
@@ -31,6 +33,8 @@ router.put("/update-photo", authMiddleware, upload.single("image"), updatePhoto)
 // History routes (protected)
 router.get("/history", authMiddleware, getHistory);
 router.post("/history", authMiddleware, createHistoryEntry);
+router.get("/history/:id", authMiddleware, getHistoryById);
+router.patch("/history/:id", authMiddleware, updateHistoryEntry);
 router.delete("/history/:id", authMiddleware, deleteHistoryEntry);
 router.delete("/history", authMiddleware, clearHistory);
 

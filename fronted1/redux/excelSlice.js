@@ -9,6 +9,7 @@ const initialState = {
   rowCount: 0,
   colCount: 0,
   aiAnalysis: null,
+  analysisId: null,
 };
 
 const excelSlice = createSlice({
@@ -16,11 +17,20 @@ const excelSlice = createSlice({
   initialState,
   reducers: {
     setExcelData: (state, action) => {
-      const { data = [], fileName = "", sheetNames = [], activeSheet = "" } = action.payload || {};
+      const {
+        data = [],
+        fileName = "",
+        sheetNames = [],
+        activeSheet = "",
+        analysisId,
+      } = action.payload || {};
       state.data = data;
       state.fileName = fileName;
       state.sheetNames = sheetNames;
       state.activeSheet = activeSheet || (sheetNames.length > 0 ? sheetNames[0] : "");
+      if (analysisId !== undefined) {
+        state.analysisId = analysisId;
+      }
 
       if (Array.isArray(data) && data.length > 0) {
         state.headers = (data[0] || []).map((h, idx) => (h !== undefined && h !== null && String(h).trim() !== "" ? String(h) : `Column ${idx + 1}`));
@@ -32,6 +42,9 @@ const excelSlice = createSlice({
         state.colCount = 0;
       }
     },
+    setAnalysisId: (state, action) => {
+      state.analysisId = action.payload || null;
+    },
     clearExcelData: (state) => {
       state.data = [];
       state.fileName = "";
@@ -41,6 +54,7 @@ const excelSlice = createSlice({
       state.rowCount = 0;
       state.colCount = 0;
       state.aiAnalysis = null;
+      state.analysisId = null;
     },
     setAiAnalysis: (state, action) => {
       state.aiAnalysis = action.payload;
@@ -48,5 +62,5 @@ const excelSlice = createSlice({
   },
 });
 
-export const { setExcelData, clearExcelData, setAiAnalysis } = excelSlice.actions;
+export const { setExcelData, setAnalysisId, clearExcelData, setAiAnalysis } = excelSlice.actions;
 export default excelSlice.reducer;

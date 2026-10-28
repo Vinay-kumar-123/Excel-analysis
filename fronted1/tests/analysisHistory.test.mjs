@@ -8,6 +8,8 @@ import {
   filterAndSortHistory,
   exportHistoryTableAsCsv,
   exportHistoryAsMarkdown,
+  getValidEntryId,
+  isWorkbookEntry,
   MAX_ANALYSIS_HISTORY,
   removeUserAnalysis,
 } from "../lib/analysisHistory.mjs";
@@ -130,4 +132,122 @@ test("exportHistoryAsMarkdown renders title, prompt, response, and table markdow
   assert.ok(md.includes("Highlight top performers"));
   assert.ok(md.includes("## Gemini Insights"));
   assert.ok(md.includes("Top performer was Team Alpha."));
+});
+
+test("reconstructs historical analysis data and saved chart configurations accurately", () => {
+  const savedAnalysis = {
+    id: "hist-101",
+    fileName: "Monthly_Sales.xlsx",
+    status: "Completed",
+    sheetNames: ["Sales_Data", "Summary"],
+    selectedSheet: "Sales_Data",
+    rowCount: 30,
+    columnCount: 3,
+    dataSnapshot: [
+      ["Date", "Category", "Revenue"],
+      ["2026-10-01", "Hardware", 1500],
+      ["2026-10-02", "Software", 3200],
+    ],
+    chartConfigurations: [
+      {
+        id: "c-1",
+        chartType: "Bar",
+        title: "Revenue by Category",
+        xAxisCol: 1,
+        yAxisCol: 2,
+        chartData: {
+          columns: ["Category", "Revenue"],
+          rows: [["Hardware", 1500], ["Software", 3200]],
+        },
+      },
+    ],
+    savedInsights: [
+      {
+        query: "What is top category?",
+        response: "Software generated the highest revenue ($3,200).",
+      },
+    ],
+  };
+
+  assert.equal(savedAnalysis.fileName, "Monthly_Sales.xlsx");
+  assert.equal(savedAnalysis.sheetNames.length, 2);
+  assert.equal(savedAnalysis.dataSnapshot.length, 3);
+  assert.equal(savedAnalysis.chartConfigurations[0].title, "Revenue by Category");
+  assert.equal(savedAnalysis.savedInsights[0].response.includes("Software"), true);
+});
+
+test("getValidEntryId returns null for undefined, null, or empty string to prevent /history/undefined", () => {
+  assert.equal(getValidEntryId(null), null);
+  assert.equal(getValidEntryId({}), null);
+  assert.equal(getValidEntryId({ id: undefined }), null);
+  assert.equal(getValidEntryId({ id: "undefined" }), null);
+  assert.equal(getValidEntryId({ id: "null" }), null);
+  assert.equal(getValidEntryId({ id: "" }), null);
+  assert.equal(getValidEntryId({ _id: "   ", id: "null" }), null);
+});
+
+test("getValidEntryId extracts valid _id, id, or clientEntryId correctly", () => {
+  assert.equal(getValidEntryId({ _id: "6507f1f77b1b3a2a8b999999" }), "6507f1f77b1b3a2a8b999999");
+  assert.equal(getValidEntryId({ id: "6507f1f77b1b3a2a8b888888" }), "6507f1f77b1b3a2a8b888888");
+  assert.equal(getValidEntryId({ clientEntryId: "uuid-12345" }), "uuid-12345");
+  assert.equal(getValidEntryId({ id: "undefined", _id: "valid-mongo-id" }), "valid-mongo-id");
+});
+
+test("createAnalysisEntry guarantees a valid id even when payload lacks id", () => {
+  const entry = createAnalysisEntry({ fileName: "test.xlsx", rowCount: 10 });
+  assert.ok(entry.id);
+  assert.notEqual(entry.id, "undefined");
+  assert.notEqual(entry.id, "null");
+  assert.ok(entry.clientEntryId);
+});
+
+test("appendAnalysisEntry replaces optimistic clientEntryId with backend persisted record without duplicate cards", () => {
+  const optimistic = {
+    id: "temp-client-id",
+    clientEntryId: "temp-client-id",
+    fileName: "Sales.xlsx",
+    rowCount: 20,
+  };
+  const list = [optimistic];
+
+  const canonicalBackend = {
+    id: "6507f1f77b1b3a2a8b111111",
+    _id: "6507f1f77b1b3a2a8b111111",
+    clientEntryId: "temp-client-id",
+    fileName: "Sales.xlsx",
+    rowCount: 20,
+  };
+
+  const updated = appendAnalysisEntry(list, canonicalBackend);
+  assert.equal(updated.length, 1);
+  assert.equal(updated[0].id, "6507f1f77b1b3a2a8b111111");
+  assert.equal(updated[0]._id, "6507f1f77b1b3a2a8b111111");
+});
+
+test("isWorkbookEntry distinguishes workbook analyses from standalone user activities (ai, chart, summary)", () => {
+  const workbookEntry1 = { id: "w1", type: "workbook", fileName: "Sales.xlsx", rowCount: 100 };
+  const workbookEntry2 = { id: "w2", fileName: "Budget.xlsx", sheetNames: ["Q1"] };
+  const standaloneAi = { id: "a1", type: "ai", title: "hii", prompt: "hii" };
+  const standaloneChart = { id: "c1", type: "chart", title: "Units Sold by Date" };
+  const standaloneSummary = { id: "s1", type: "summary", title: "Statistics summary" };
+
+  assert.equal(isWorkbookEntry(workbookEntry1), true);
+  assert.equal(isWorkbookEntry(workbookEntry2), true);
+  assert.equal(isWorkbookEntry(standaloneAi), false);
+  assert.equal(isWorkbookEntry(standaloneChart), false);
+  assert.equal(isWorkbookEntry(standaloneSummary), false);
+});
+
+test("filterAndSortHistory with onlyWorkbooks removes standalone user activities while preserving workbooks", () => {
+  const items = [
+    { id: "w1", type: "workbook", fileName: "Sales.xlsx", createdAt: "2026-10-25T10:00:00Z" },
+    { id: "a1", type: "ai", title: "hii", createdAt: "2026-10-25T11:00:00Z" },
+    { id: "c1", type: "chart", title: "Units Sold by Date", createdAt: "2026-10-25T12:00:00Z" },
+    { id: "w2", type: "workbook", fileName: "Inventory.xlsx", createdAt: "2026-10-25T13:00:00Z" },
+  ];
+
+  const workbooksOnly = filterAndSortHistory(items, { onlyWorkbooks: true });
+  assert.equal(workbooksOnly.length, 2);
+  assert.equal(workbooksOnly[0].id, "w2");
+  assert.equal(workbooksOnly[1].id, "w1");
 });
