@@ -7,22 +7,21 @@ export default function PowerMapChart3D({
   values = [],
   text = [],
   title = "Geographic Power Map (3D Globe)",
+  measureLabel = "Value",
   locationMode = "country names",
 }) {
-  const defaultLocations = ["United States", "India", "Germany", "Japan", "Brazil", "United Kingdom", "Canada", "Australia"];
-  const defaultValues = [850, 620, 480, 410, 310, 390, 340, 290];
-
   const plotData = [
     {
       type: "choropleth",
       locationmode: locationMode,
-      locations: locations.length > 0 ? locations : defaultLocations,
-      z: values.length > 0 ? values : defaultValues,
-      text: text.length > 0 ? text : (locations.length > 0 ? locations : defaultLocations),
+      locations,
+      z: values,
+      text: text.length > 0 ? text : locations,
+      hovertemplate: "%{location}<br>%{z:,.2f}<extra></extra>",
       colorscale: "Blues",
       reversescale: true,
       colorbar: {
-        title: "Magnitude",
+        title: measureLabel,
         thickness: 12,
       },
       marker: {

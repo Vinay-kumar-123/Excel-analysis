@@ -3,9 +3,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "react-toastify";
+import api from "@/lib/api";
 
 export default function Signup() {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const router = useRouter();
   const [user, setUser] = useState({
     name: "",
@@ -26,17 +26,10 @@ export default function Signup() {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/api/v1/user/register`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(user),
-      });
-      const data = await res.json();
+      const res = await api.post("/api/v1/user/register", user);
+      const data = res.data;
 
-      if (res.ok && data.success) {
+      if (data.success) {
         toast.success(data.message || "Registration successful! Please log in.");
         router.push("/login");
       } else {

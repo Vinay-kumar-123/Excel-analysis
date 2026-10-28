@@ -11,24 +11,14 @@ export default function SurfaceChart3D({
   yLabel = "Y Axis",
   zLabel = "Z Elevation",
 }) {
-  const defaultZ = [
-    [10, 10.6, 12, 13, 14],
-    [11, 12.5, 14, 15, 16],
-    [13, 15.0, 17, 18, 19],
-    [12, 14.0, 16, 17, 18],
-    [10, 11.0, 13, 14, 15],
-  ];
-
   const plotData = [
     {
       type: "surface",
-      z: zMatrix && zMatrix.length > 0 ? zMatrix : defaultZ,
+      z: zMatrix,
       x: xValues,
       y: yValues,
       colorscale: "Plasma",
-      contours: {
-        z: { show: true, usecolormap: true, highlightcolor: "#42f462", project: { z: true } },
-      },
+      hovertemplate: `${xLabel}: %{x}<br>${yLabel}: %{y}<br>${zLabel}: %{z}<extra></extra>`,
     },
   ];
 

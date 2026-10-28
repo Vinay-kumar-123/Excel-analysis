@@ -4,30 +4,12 @@ import PlotlyWrapper from "./PlotlyWrapper";
 
 export default function BarChart3D({
   dataPoints,
-  title = "3D Bar / Column Chart",
+  title = "3D Point Plot",
   xLabel = "X Axis",
   yLabel = "Y Axis",
   zLabel = "Z Axis",
 }) {
-  const defaultData = [
-    {
-      type: "scatter3d",
-      mode: "markers",
-      x: ["Prod A", "Prod B", "Prod C", "Prod D", "Prod E"],
-      y: ["Q1", "Q2", "Q3", "Q4", "Q1"],
-      z: [120, 340, 210, 480, 310],
-      marker: {
-        size: 14,
-        color: [120, 340, 210, 480, 310],
-        colorscale: "Viridis",
-        opacity: 0.85,
-        symbol: "square",
-        colorbar: { title: zLabel, thickness: 12 },
-      },
-    },
-  ];
-
-  const plotData = dataPoints || defaultData;
+  const plotData = dataPoints || [];
 
   const layout = {
     title: { text: title, font: { size: 16 } },
@@ -47,7 +29,7 @@ export default function BarChart3D({
       <div className="flex items-center justify-between mb-2">
         <h3 className="font-semibold text-gray-700 text-lg">{title}</h3>
         <span className="text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full font-medium">
-          3D Interactive
+          3D Point Plot
         </span>
       </div>
       <div className="flex-1 w-full min-h-[380px]">

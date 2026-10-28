@@ -73,8 +73,9 @@ function UploadContent() {
             sessionStorage.setItem("excel_data", JSON.stringify(jsonData));
             sessionStorage.setItem("excel_filename", file.name);
           }
-        } catch {
-          // Ignore storage quota
+        } catch (storageError) {
+          console.warn("Could not persist the uploaded workbook in session storage:", storageError);
+          toast.warning("The file is ready for this session, but could not be saved for page refresh.");
         }
 
         toast.success(`Successfully parsed "${file.name}" with ${jsonData.length} rows`);
@@ -111,8 +112,9 @@ function UploadContent() {
       if (typeof window !== "undefined") {
         sessionStorage.setItem("excel_data", JSON.stringify(jsonData));
       }
-    } catch {
-      // Ignore
+    } catch (storageError) {
+      console.warn("Could not persist the selected worksheet in session storage:", storageError);
+      toast.warning("The selected sheet is ready, but may not be restored after a page refresh.");
     }
   };
 

@@ -2,8 +2,11 @@
 import React, { useState, useEffect } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import { setAiAnalysis } from "@/redux/excelSlice";
-import { setUser } from "@/redux/authSlice";
-import axios from "axios";
+import { logoutUser } from "@/redux/authSlice";
+import { addHistoryEntry } from "@/redux/historySlice";
+import { saveAnalysisHistory } from "@/lib/historyService";
+import api from "@/lib/api";
+import { createAnalysisEntry } from "@/lib/analysisHistory.mjs";
 import { toast } from "react-toastify";
 import Link from "next/link";
 import AuthGuard from "@/components/AuthGuard";
@@ -26,7 +29,7 @@ function AiPageContent() {
   const router = useRouter();
   const dispatch = useDispatch();
   const reduxExcel = useSelector((state) => state.excel);
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const user = useSelector((state) => state.auth?.user);
 
   const [dataset, setDataset] = useState([]);
   const [fileName, setFileName] = useState("");
@@ -60,18 +63,8 @@ function AiPageContent() {
       }
     }
 
-    // Default sample data for demonstration if no upload yet
-    const demoData = [
-      ["Region", "Sales", "Profit", "Units", "Satisfaction"],
-      ["North America", 45000, 12000, 320, 88],
-      ["Europe", 38000, 9500, 275, 84],
-      ["Asia Pacific", 52000, 16000, 410, 91],
-      ["Latin America", 21000, 4200, 160, 78],
-      ["Middle East", 18500, 5100, 130, 82],
-      ["Africa", 14000, 3100, 95, 75],
-    ];
-    setDataset(demoData);
-    setFileName("Sample Sales Dataset.xlsx");
+    setDataset([]);
+    setFileName("");
   }, [reduxExcel]);
 
   const quickPrompts = [
@@ -98,6 +91,10 @@ function AiPageContent() {
   ];
 
   const handleAskAI = async (customPrompt) => {
+    if (dataset.length <= 1) {
+      toast.warning("Upload a worksheet with data before requesting AI insights.");
+      return;
+    }
     const promptToSend = customPrompt || query;
     if (!promptToSend.trim()) {
       toast.warning("Please enter a question or select a quick prompt.");
@@ -107,22 +104,36 @@ function AiPageContent() {
     setLoading(true);
     try {
       const sampleRows = dataset.slice(0, 150);
-      const res = await axios.post(
-        `${apiUrl}/api/v1/user/gemni`,
+      const res = await api.post(
+        "/api/v1/user/gemni",
         {
           data: sampleRows,
           query: promptToSend,
-        },
-        { withCredentials: true }
+          datasetInfo: {
+            totalRows: Math.max(0, dataset.length - 1),
+            rowsIncluded: Math.max(0, sampleRows.length - 1),
+            truncated: dataset.length > sampleRows.length,
+          },
+        }
       );
 
-      const reply = res.data?.reply || "No insights could be generated for this query.";
+      const reply = typeof res.data?.reply === "string" ? res.data.reply.trim() : "";
+      if (!reply) throw new Error("The AI service returned an empty answer. Please try a more specific question.");
       setResponse(reply);
       dispatch(setAiAnalysis(reply));
+      const historyItem = createAnalysisEntry({
+        type: "ai",
+        title: promptToSend.length > 90 ? `${promptToSend.slice(0, 87)}...` : promptToSend,
+        prompt: promptToSend,
+        response: reply,
+        datasetName: fileName || "Uploaded dataset",
+        rowCount: Math.max(0, dataset.length - 1),
+        userId: String(user?._id || user?.id || "anonymous"),
+      });
+      saveAnalysisHistory(dispatch, historyItem, Boolean(user));
     } catch (err) {
-      console.error("AI Error:", err);
       if (err.response?.status === 401) {
-        dispatch(setUser(null));
+        dispatch(logoutUser());
         toast.error("Session expired or authentication required. Please log in again.");
         router.push("/login?redirect=/ai");
         return;
@@ -130,6 +141,7 @@ function AiPageContent() {
       const errMsg =
         err.response?.data?.error ||
         err.response?.data?.message ||
+        err.message ||
         "Failed to generate AI insights. Please ensure backend is running and Gemini API key is valid.";
       toast.error(errMsg);
     } finally {
@@ -196,11 +208,17 @@ function AiPageContent() {
           <div className="flex items-center gap-2">
             <FileSpreadsheet className="w-4 h-4 text-purple-300" />
             <span>Active Dataset:</span>
-            <span className="font-semibold text-white">{fileName}</span>
+            <span className="font-semibold text-white">{fileName || "No dataset loaded"}</span>
             <span>({Math.max(0, dataset.length - 1)} rows)</span>
           </div>
         </div>
       </div>
+
+      {dataset.length <= 1 && (
+        <div className="mb-6 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+          Upload a workbook to analyze your own data. AI insights will not use demo data.
+        </div>
+      )}
 
       {/* Quick Prompts Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -213,7 +231,7 @@ function AiPageContent() {
                 setQuery(item.prompt);
                 handleAskAI(item.prompt);
               }}
-              disabled={loading}
+              disabled={loading || dataset.length <= 1}
               className="flex flex-col text-left p-4 bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-md hover:border-purple-300 transition duration-200 group cursor-pointer disabled:opacity-50"
             >
               <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
@@ -241,13 +259,13 @@ function AiPageContent() {
               placeholder="Ask anything about your data (e.g. 'What is the top performing segment?', 'Summarize key takeaways')..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              disabled={loading}
+              disabled={loading || dataset.length <= 1}
               className="w-full pl-4 pr-10 py-3 text-sm bg-gray-50 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-800 disabled:opacity-60"
             />
           </div>
           <button
             type="submit"
-            disabled={loading || !query.trim()}
+            disabled={loading || dataset.length <= 1 || !query.trim()}
             className="w-full md:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-sm font-semibold rounded-xl shadow-md transition disabled:opacity-50 cursor-pointer"
           >
             {loading ? (
@@ -309,7 +327,7 @@ function AiPageContent() {
             Gemini is analyzing your dataset...
           </h3>
           <p className="text-xs text-gray-500">
-            Processing numerical distributions, trends, and correlations. This usually takes 3-5 seconds.
+            The response uses the uploaded worksheet rows sent with your question. Larger sheets are sampled and identified as such.
           </p>
         </div>
       )}

@@ -1,6 +1,7 @@
 import { configureStore, combineReducers } from "@reduxjs/toolkit";
 import authReducer from "./authSlice";
 import excelReducer from "./excelSlice";
+import historyReducer from "./historySlice";
 import storage from "./storage";
 import {
   persistReducer,
@@ -12,19 +13,18 @@ import {
   REGISTER,
 } from "redux-persist";
 
-// Performance Optimization: Only persist 'auth' in storage.
-// Persisting large Excel datasets to localStorage blocks the main thread
-// with synchronous multi-megabyte JSON stringification on every action.
+// Persist history, but not full spreadsheet data, to avoid serializing large workbooks.
 const persistConfig = {
   key: "root",
   version: 1,
   storage,
-  whitelist: ["auth"],
+  whitelist: ["auth", "history"],
 };
 
 const rootReducer = combineReducers({
   auth: authReducer,
   excel: excelReducer,
+  history: historyReducer,
 });
 
 const persistedReducer = persistReducer(persistConfig, rootReducer);

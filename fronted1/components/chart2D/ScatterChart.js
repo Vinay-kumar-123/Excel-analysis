@@ -3,36 +3,18 @@ import React, { useRef } from "react";
 import "./chartSetup";
 import { Scatter } from "react-chartjs-2";
 import { Download } from "lucide-react";
+import { formatChartValue } from "./chartFormatting";
 
 export default function ScatterChartComponent({
   chartData,
   title = "Scatter Plot",
   xAxisLabel = "X Axis",
   yAxisLabel = "Y Axis",
+  currency = false,
 }) {
   const chartRef = useRef(null);
-
-  const defaultData = {
-    datasets: [
-      {
-        label: "Observations",
-        data: [
-          { x: 10, y: 20 },
-          { x: 15, y: 10 },
-          { x: 26, y: 28 },
-          { x: 35, y: 45 },
-          { x: 42, y: 38 },
-          { x: 50, y: 60 },
-        ],
-        backgroundColor: "rgba(236, 72, 153, 0.8)",
-        borderColor: "rgba(236, 72, 153, 1)",
-        pointRadius: 6,
-        pointHoverRadius: 8,
-      },
-    ],
-  };
-
-  const dataToRender = chartData && chartData.datasets?.length ? chartData : defaultData;
+  const dataToRender = chartData || { datasets: [] };
+  const hasChart = Boolean(dataToRender.datasets?.length);
 
   const options = {
     responsive: true,
@@ -52,7 +34,7 @@ export default function ScatterChartComponent({
         callbacks: {
           label: (context) => {
             const raw = context.raw || {};
-            return `(${raw.x}, ${raw.y})`;
+            return `${raw.label ? `${raw.label}: ` : ""}(${formatChartValue(raw.x)}, ${formatChartValue(raw.y, currency)})`;
           },
         },
       },
@@ -67,6 +49,7 @@ export default function ScatterChartComponent({
           font: { weight: "600" },
         },
         grid: { color: "rgba(229, 231, 235, 0.5)" },
+        ticks: { callback: (value) => formatChartValue(value) },
       },
       y: {
         title: {
@@ -75,6 +58,7 @@ export default function ScatterChartComponent({
           font: { weight: "600" },
         },
         grid: { color: "rgba(229, 231, 235, 0.5)" },
+        ticks: { callback: (value) => formatChartValue(value, currency) },
       },
     },
   };
@@ -94,7 +78,8 @@ export default function ScatterChartComponent({
         <h3 className="font-semibold text-gray-700 text-lg">{title}</h3>
         <button
           onClick={handleDownload}
-          className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition"
+          disabled={!hasChart}
+          className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
           title="Export as PNG"
         >
           <Download className="w-3.5 h-3.5 text-pink-600" />
@@ -102,7 +87,9 @@ export default function ScatterChartComponent({
         </button>
       </div>
       <div className="flex-1 relative w-full min-h-[340px]">
-        <Scatter ref={chartRef} data={dataToRender} options={options} />
+        {hasChart
+          ? <Scatter ref={chartRef} data={dataToRender} options={options} />
+          : <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-500">No compatible numeric data to display.</div>}
       </div>
     </div>
   );

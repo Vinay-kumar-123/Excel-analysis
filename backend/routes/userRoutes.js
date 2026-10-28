@@ -7,6 +7,12 @@ import {
   GemniApi,
   updatePhoto,
 } from "../controllers/authController.js";
+import {
+  getHistory,
+  createHistoryEntry,
+  deleteHistoryEntry,
+  clearHistory,
+} from "../controllers/historyController.js";
 import upload from "../multer/multer.js";
 import authMiddleware from "../middleware/authMiddleWare.js";
 
@@ -21,5 +27,11 @@ router.get("/logout", logout);
 router.get("/me", authMiddleware, getProfile);
 router.post("/gemni", authMiddleware, GemniApi);
 router.put("/update-photo", authMiddleware, upload.single("image"), updatePhoto);
+
+// History routes (protected)
+router.get("/history", authMiddleware, getHistory);
+router.post("/history", authMiddleware, createHistoryEntry);
+router.delete("/history/:id", authMiddleware, deleteHistoryEntry);
+router.delete("/history", authMiddleware, clearHistory);
 
 export default router;

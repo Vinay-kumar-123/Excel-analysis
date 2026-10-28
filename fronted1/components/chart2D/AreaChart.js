@@ -3,6 +3,7 @@ import React, { useRef } from "react";
 import "./chartSetup";
 import { Line } from "react-chartjs-2";
 import { Download } from "lucide-react";
+import { formatChartValue } from "./chartFormatting";
 
 export default function AreaChart({
   chartData,
@@ -10,26 +11,11 @@ export default function AreaChart({
   xAxisLabel = "",
   yAxisLabel = "",
   stacked = false,
+  currency = false,
 }) {
   const chartRef = useRef(null);
-
-  const defaultData = {
-    labels: ["Q1", "Q2", "Q3", "Q4"],
-    datasets: [
-      {
-        label: "Revenue",
-        data: [3500, 4200, 5100, 6800],
-        borderColor: "rgba(16, 185, 129, 1)",
-        backgroundColor: "rgba(16, 185, 129, 0.25)",
-        fill: true,
-        tension: 0.4,
-        pointBackgroundColor: "rgba(16, 185, 129, 1)",
-      },
-    ],
-  };
-
   // Ensure fill is enabled on all datasets for Area chart
-  const preparedData = chartData && chartData.labels?.length ? {
+  const preparedData = chartData?.labels?.length ? {
     ...chartData,
     datasets: chartData.datasets.map((ds, idx) => ({
       ...ds,
@@ -37,7 +23,8 @@ export default function AreaChart({
       tension: ds.tension ?? 0.35,
       backgroundColor: ds.backgroundColor || `rgba(${30 + idx * 60}, ${120 + idx * 30}, 220, 0.25)`,
     })),
-  } : defaultData;
+  } : { labels: [], datasets: [] };
+  const hasChart = Boolean(preparedData.labels?.length && preparedData.datasets?.length);
 
   const options = {
     responsive: true,
@@ -57,6 +44,9 @@ export default function AreaChart({
         backgroundColor: "rgba(17, 24, 39, 0.9)",
         padding: 10,
         cornerRadius: 8,
+        callbacks: {
+          label: (context) => `${context.dataset.label || ""}: ${formatChartValue(context.parsed.y, currency)}`,
+        },
       },
     },
     scales: {
@@ -68,6 +58,7 @@ export default function AreaChart({
           font: { weight: "600" },
         },
         grid: { color: "rgba(229, 231, 235, 0.5)" },
+        ticks: { autoSkip: true, maxTicksLimit: 12, maxRotation: 45, minRotation: 0 },
       },
       y: {
         stacked,
@@ -78,6 +69,7 @@ export default function AreaChart({
         },
         grid: { color: "rgba(229, 231, 235, 0.5)" },
         beginAtZero: true,
+        ticks: { callback: (value) => formatChartValue(value, currency) },
       },
     },
   };
@@ -97,7 +89,8 @@ export default function AreaChart({
         <h3 className="font-semibold text-gray-700 text-lg">{title}</h3>
         <button
           onClick={handleDownload}
-          className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition"
+          disabled={!hasChart}
+          className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
           title="Export as PNG"
         >
           <Download className="w-3.5 h-3.5 text-emerald-600" />
@@ -105,7 +98,9 @@ export default function AreaChart({
         </button>
       </div>
       <div className="flex-1 relative w-full min-h-[340px]">
-        <Line ref={chartRef} data={preparedData} options={options} />
+        {hasChart
+          ? <Line ref={chartRef} data={preparedData} options={options} />
+          : <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-500">No compatible data to display.</div>}
       </div>
     </div>
   );

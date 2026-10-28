@@ -12,21 +12,18 @@ export default function ScatterChart3D({
   yLabel = "Y Axis",
   zLabel = "Z Axis",
 }) {
-  const defaultX = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-  const defaultY = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
-  const defaultZ = [100, 120, 110, 140, 130, 180, 170, 210, 200, 230];
-
   const plotData = [
     {
       type: "scatter3d",
       mode: "markers",
-      x: x.length > 0 ? x : defaultX,
-      y: y.length > 0 ? y : defaultY,
-      z: z.length > 0 ? z : defaultZ,
-      text: labels.length > 0 ? labels : undefined,
+      x,
+      y,
+      z,
+      text: labels,
+      hovertemplate: `${xLabel}: %{x}<br>${yLabel}: %{y}<br>${zLabel}: %{z}<br>%{text}<extra></extra>`,
       marker: {
         size: 7,
-        color: z.length > 0 ? z : defaultZ,
+        color: z,
         colorscale: "Viridis",
         opacity: 0.8,
         colorbar: { title: zLabel, thickness: 12 },

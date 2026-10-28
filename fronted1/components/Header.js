@@ -2,33 +2,27 @@
 import Link from "next/link";
 import { useDispatch, useSelector } from "react-redux";
 import { FaUserCircle } from "react-icons/fa";
-import { setUser } from "@/redux/authSlice";
+import { logoutUser } from "@/redux/authSlice";
 import { toast } from "react-toastify";
 import { useRouter } from "next/navigation";
-import { Sparkles, BarChart3, Upload, LogOut } from "lucide-react";
+import { Sparkles, BarChart3, Upload, LogOut, Clock } from "lucide-react";
+import api from "@/lib/api";
 
 export default function Header() {
   const router = useRouter();
   const dispatch = useDispatch();
   const { user } = useSelector((state) => state.auth);
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
   const logoutHandler = async () => {
     try {
-      const res = await fetch(`${apiUrl}/api/v1/user/logout`, {
-        method: "GET",
-        credentials: "include",
-      });
-      const data = await res.json();
+      const res = await api.get("/api/v1/user/logout");
+      const data = res.data;
       if (data.success) {
-        dispatch(setUser(null));
+        dispatch(logoutUser());
         toast.success(data.message || "Logged out successfully");
         router.push("/login");
       }
     } catch (error) {
-      dispatch(setUser(null));
-      toast.info("Logged out locally");
-      router.push("/login");
+      toast.error(error.response?.data?.message || "Could not log out. Please try again.");
     }
   };
 
@@ -36,6 +30,7 @@ export default function Header() {
   const uploadHref = user ? "/upload" : "/login?redirect=/upload";
   const visualizeHref = user ? "/tabSection" : "/login?redirect=/tabSection";
   const aiHref = user ? "/ai" : "/login?redirect=/ai";
+  const historyHref = user ? "/history" : "/login?redirect=/history";
 
   return (
     <header className="bg-white/90 backdrop-blur-md border-b border-gray-200 fixed top-0 w-full z-50">
@@ -89,6 +84,14 @@ export default function Header() {
             >
               <Sparkles className="w-4 h-4 text-purple-500" />
               <span>AI Insights</span>
+            </Link>
+
+            <Link
+              href={historyHref}
+              className="flex items-center gap-1.5 hover:text-amber-600 transition cursor-pointer"
+            >
+              <Clock className="w-4 h-4 text-amber-500" />
+              <span>History</span>
             </Link>
 
             {!user ? (

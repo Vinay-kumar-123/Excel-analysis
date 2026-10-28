@@ -3,7 +3,8 @@ import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useDispatch } from "react-redux";
 import { toast } from "react-toastify";
-import axios from "axios";
+import api from "@/lib/api";
+import { safeRedirectPath } from "@/lib/safeRedirect.mjs";
 import { setUser } from "@/redux/authSlice";
 import Link from "next/link";
 import { Lock, Info } from "lucide-react";
@@ -11,10 +12,10 @@ import { Lock, Info } from "lucide-react";
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectTarget = searchParams.get("redirect") || "/upload";
+  const requestedRedirect = searchParams.get("redirect");
+  const redirectTarget = safeRedirectPath(requestedRedirect);
   const hasRedirect = !!searchParams.get("redirect");
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const dispatch = useDispatch();
   const [input, setInput] = useState({
     email: "",
@@ -35,14 +36,7 @@ function LoginForm() {
     setLoading(true);
 
     try {
-      const response = await axios.post(
-        `${apiUrl}/api/v1/user/login`,
-        input,
-        {
-          headers: { "Content-Type": "application/json" },
-          withCredentials: true,
-        }
-      );
+      const response = await api.post("/api/v1/user/login", input);
 
       if (response.data.success) {
         dispatch(setUser(response.data.user));

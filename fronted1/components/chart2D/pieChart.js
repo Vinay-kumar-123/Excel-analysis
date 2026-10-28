@@ -3,31 +3,17 @@ import React, { useRef } from "react";
 import "./chartSetup";
 import { Pie, Doughnut } from "react-chartjs-2";
 import { Download } from "lucide-react";
+import { formatChartValue } from "./chartFormatting";
 
 export default function PieChartComponent({
   chartData,
   title = "Pie Chart",
   isDoughnut = false,
+  currency = false,
 }) {
   const chartRef = useRef(null);
-
-  const defaultData = {
-    labels: ["Desktop", "Mobile", "Tablet"],
-    datasets: [
-      {
-        data: [55, 35, 10],
-        backgroundColor: [
-          "rgba(59, 130, 246, 0.8)",
-          "rgba(147, 51, 234, 0.8)",
-          "rgba(236, 72, 153, 0.8)",
-        ],
-        borderColor: "#ffffff",
-        borderWidth: 2,
-      },
-    ],
-  };
-
-  const dataToRender = chartData && chartData.labels?.length ? chartData : defaultData;
+  const dataToRender = chartData || { labels: [], datasets: [] };
+  const hasChart = Boolean(dataToRender.labels?.length && dataToRender.datasets?.length);
 
   const options = {
     responsive: true,
@@ -47,6 +33,9 @@ export default function PieChartComponent({
         backgroundColor: "rgba(17, 24, 39, 0.9)",
         padding: 10,
         cornerRadius: 8,
+        callbacks: {
+          label: (context) => `${context.label}: ${formatChartValue(context.parsed, currency)}`,
+        },
       },
     },
   };
@@ -66,7 +55,8 @@ export default function PieChartComponent({
         <h3 className="font-semibold text-gray-700 text-lg">{title}</h3>
         <button
           onClick={handleDownload}
-          className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition"
+          disabled={!hasChart}
+          className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
           title="Export as PNG"
         >
           <Download className="w-3.5 h-3.5 text-purple-600" />
@@ -74,7 +64,9 @@ export default function PieChartComponent({
         </button>
       </div>
       <div className="flex-1 relative w-full min-h-[340px] flex items-center justify-center">
-        {isDoughnut ? (
+        {!hasChart ? (
+          <div className="text-sm text-gray-500">No compatible category and positive measure data to display.</div>
+        ) : isDoughnut ? (
           <Doughnut ref={chartRef} data={dataToRender} options={options} />
         ) : (
           <Pie ref={chartRef} data={dataToRender} options={options} />

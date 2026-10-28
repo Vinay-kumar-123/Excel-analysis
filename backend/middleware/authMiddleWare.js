@@ -37,26 +37,24 @@ const authMiddleware = async (req, res, next) => {
     const user = await User.findById(decoded.userId).select("-password");
 
     if (!user) {
-      return res.status(404).json({
+      return res.status(401).json({
         success: false,
-        message: "User session not found.",
+        message: "User session is no longer valid. Please log in again.",
       });
     }
 
     req.user = user;
     next();
   } catch (error) {
-    if (error.name === "TokenExpiredError") {
+    if (["TokenExpiredError", "JsonWebTokenError", "NotBeforeError"].includes(error.name)) {
       return res.status(401).json({
         success: false,
-        message: "Session expired. Please log in again.",
+        message: error.name === "TokenExpiredError"
+          ? "Session expired. Please log in again."
+          : "Invalid authentication token. Please log in again.",
       });
     }
-    console.error("Auth middleware error:", error.message);
-    return res.status(401).json({
-      success: false,
-      message: "Unauthorized: Invalid or expired session token.",
-    });
+    return next(error);
   }
 };
 

@@ -8,11 +8,16 @@ import dotenv from "dotenv";
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8000;
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  "https://excel-analytics-blush.vercel.app",
+  ...(process.env.NODE_ENV === "production" ? [] : ["http://localhost:3000"]),
+].filter(Boolean);
 
 // Middlewares
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: (origin, callback) => callback(null, !origin || allowedOrigins.includes(origin)),
     credentials: true,
   })
 );

@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { BarChart3, Box, Table, Sparkles } from "lucide-react";
+import { BarChart3, Box, Table, Sparkles, History } from "lucide-react";
 
 export default function Tab({ activeTab, onTabChange, counts = {} }) {
   const tabs = [
@@ -30,6 +30,13 @@ export default function Tab({ activeTab, onTabChange, counts = {} }) {
       icon: Sparkles,
       badge: "Gemini",
       color: "text-pink-600",
+    },
+    {
+      id: "HISTORY",
+      label: "Analysis History",
+      icon: History,
+      badge: counts.history || undefined,
+      color: "text-amber-600",
     },
   ];
 

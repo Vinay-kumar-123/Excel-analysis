@@ -1,19 +1,20 @@
 "use client";
 import React, { useState, useRef } from "react";
 import { useSelector, useDispatch } from "react-redux";
-import { setUser } from "@/redux/authSlice";
+import { logoutUser, setUser } from "@/redux/authSlice";
 import { toast } from "react-toastify";
 import userLogo from "./userphoto.png";
-import axios from "axios";
+import api from "@/lib/api";
 import { Camera, Mail, User as UserIcon } from "lucide-react";
 import AuthGuard from "@/components/AuthGuard";
+import { useRouter } from "next/navigation";
 
 const ProfileContent = () => {
   const dispatch = useDispatch();
+  const router = useRouter();
   const { user } = useSelector((state) => state.auth);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef();
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
   const handleClick = () => {
     fileInputRef.current.click();
@@ -28,19 +29,18 @@ const ProfileContent = () => {
 
     try {
       setLoading(true);
-      const res = await axios.put(
-        `${apiUrl}/api/v1/user/update-photo`,
-        formData,
-        {
-          headers: { "Content-Type": "multipart/form-data" },
-          withCredentials: true,
-        }
-      );
+      const res = await api.put("/api/v1/user/update-photo", formData);
 
       const updatedUser = res.data.user;
       dispatch(setUser(updatedUser));
       toast.success("Profile photo updated successfully!");
     } catch (error) {
+      if (error.response?.status === 401) {
+        dispatch(logoutUser());
+        toast.error("Your session has expired. Please log in again.");
+        router.push("/login?redirect=/profile");
+        return;
+      }
       toast.error(error.response?.data?.message || "Image upload failed");
     } finally {
       setLoading(false);

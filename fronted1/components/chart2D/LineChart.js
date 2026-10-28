@@ -3,6 +3,7 @@ import React, { useRef } from "react";
 import "./chartSetup";
 import { Line } from "react-chartjs-2";
 import { Download } from "lucide-react";
+import { formatChartValue } from "./chartFormatting";
 
 export default function LineChart({
   chartData,
@@ -11,27 +12,11 @@ export default function LineChart({
   yAxisLabel = "",
   smooth = true,
   fill = false,
+  currency = false,
 }) {
   const chartRef = useRef(null);
-
-  const defaultData = {
-    labels: ["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
-    datasets: [
-      {
-        label: "Trend",
-        data: [10, 25, 18, 30, 45, 60],
-        borderColor: "rgba(99, 102, 241, 1)",
-        backgroundColor: fill ? "rgba(99, 102, 241, 0.2)" : "rgba(99, 102, 241, 0.05)",
-        tension: smooth ? 0.35 : 0,
-        fill: fill,
-        pointBackgroundColor: "rgba(99, 102, 241, 1)",
-        pointRadius: 4,
-        pointHoverRadius: 6,
-      },
-    ],
-  };
-
-  const dataToRender = chartData && chartData.labels?.length ? chartData : defaultData;
+  const dataToRender = chartData || { labels: [], datasets: [] };
+  const hasChart = Boolean(dataToRender.labels?.length && dataToRender.datasets?.length);
 
   const options = {
     responsive: true,
@@ -51,6 +36,9 @@ export default function LineChart({
         backgroundColor: "rgba(17, 24, 39, 0.9)",
         padding: 10,
         cornerRadius: 8,
+        callbacks: {
+          label: (context) => `${context.dataset.label || ""}: ${formatChartValue(context.parsed.y, currency)}`,
+        },
       },
     },
     scales: {
@@ -61,6 +49,7 @@ export default function LineChart({
           font: { weight: "600" },
         },
         grid: { color: "rgba(229, 231, 235, 0.5)" },
+        ticks: { autoSkip: true, maxTicksLimit: 12, maxRotation: 45, minRotation: 0 },
       },
       y: {
         title: {
@@ -70,6 +59,7 @@ export default function LineChart({
         },
         grid: { color: "rgba(229, 231, 235, 0.5)" },
         beginAtZero: true,
+        ticks: { callback: (value) => formatChartValue(value, currency) },
       },
     },
   };
@@ -89,7 +79,8 @@ export default function LineChart({
         <h3 className="font-semibold text-gray-700 text-lg">{title}</h3>
         <button
           onClick={handleDownload}
-          className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition"
+          disabled={!hasChart}
+          className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
           title="Export as PNG"
         >
           <Download className="w-3.5 h-3.5 text-indigo-600" />
@@ -97,7 +88,9 @@ export default function LineChart({
         </button>
       </div>
       <div className="flex-1 relative w-full min-h-[340px]">
-        <Line ref={chartRef} data={dataToRender} options={options} />
+        {hasChart
+          ? <Line ref={chartRef} data={dataToRender} options={options} />
+          : <div className="h-full min-h-[340px] flex items-center justify-center text-sm text-gray-500">No compatible data to display.</div>}
       </div>
     </div>
   );

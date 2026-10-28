@@ -3,33 +3,18 @@ import React, { useRef } from "react";
 import "./chartSetup";
 import { Bubble } from "react-chartjs-2";
 import { Download } from "lucide-react";
+import { formatChartValue } from "./chartFormatting";
 
 export default function BubbleChartComponent({
   chartData,
   title = "Bubble Chart",
   xAxisLabel = "X Axis",
   yAxisLabel = "Y Axis",
+  currency = false,
 }) {
   const chartRef = useRef(null);
-
-  const defaultData = {
-    datasets: [
-      {
-        label: "Market Segment",
-        data: [
-          { x: 20, y: 30, r: 15 },
-          { x: 40, y: 10, r: 10 },
-          { x: 30, y: 25, r: 25 },
-          { x: 60, y: 40, r: 18 },
-          { x: 75, y: 55, r: 12 },
-        ],
-        backgroundColor: "rgba(245, 158, 11, 0.7)",
-        borderColor: "rgba(245, 158, 11, 1)",
-      },
-    ],
-  };
-
-  const dataToRender = chartData && chartData.datasets?.length ? chartData : defaultData;
+  const dataToRender = chartData || { datasets: [] };
+  const hasChart = Boolean(dataToRender.datasets?.length);
 
   const options = {
     responsive: true,
@@ -49,7 +34,7 @@ export default function BubbleChartComponent({
         callbacks: {
           label: (context) => {
             const raw = context.raw || {};
-            return `X: ${raw.x}, Y: ${raw.y}, Size: ${raw.r}`;
+            return `${raw.label ? `${raw.label}: ` : ""}X: ${formatChartValue(raw.x)}, Y: ${formatChartValue(raw.y, currency)}, Size: ${formatChartValue(raw.sizeValue)}`;
           },
         },
       },
@@ -62,6 +47,7 @@ export default function BubbleChartComponent({
           font: { weight: "600" },
         },
         grid: { color: "rgba(229, 231, 235, 0.5)" },
+        ticks: { callback: (value) => formatChartValue(value) },
       },
       y: {
         title: {
@@ -70,6 +56,7 @@ export default function BubbleChartComponent({
           font: { weight: "600" },
         },
         grid: { color: "rgba(229, 231, 235, 0.5)" },
+        ticks: { callback: (value) => formatChartValue(value, currency) },
       },
     },
   };
@@ -89,7 +76,8 @@ export default function BubbleChartComponent({
         <h3 className="font-semibold text-gray-700 text-lg">{title}</h3>
         <button
           onClick={handleDownload}
-          className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition"
+          disabled={!hasChart}
+          className="flex items-center gap-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
           title="Export as PNG"
         >
           <Download className="w-3.5 h-3.5 text-amber-600" />
@@ -97,7 +85,9 @@ export default function BubbleChartComponent({
         </button>
       </div>
       <div className="flex-1 relative w-full min-h-[340px]">
-        <Bubble ref={chartRef} data={dataToRender} options={options} />
+        {hasChart
+          ? <Bubble ref={chartRef} data={dataToRender} options={options} />
+          : <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-500">No compatible numeric data to display.</div>}
       </div>
     </div>
   );

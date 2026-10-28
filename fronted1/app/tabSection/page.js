@@ -6,6 +6,14 @@ import { useSelector, useDispatch } from "react-redux";
 import { setExcelData } from "@/redux/excelSlice";
 import Tab from "@/components/Tab";
 import AuthGuard from "@/components/AuthGuard";
+import {
+  buildCategoryChart,
+  buildNumericPoints,
+  buildSurfaceGrid,
+  getRecommendedMappings,
+  inferColumnTypes,
+  parseNumericValue,
+} from "@/lib/chartData.mjs";
 import Link from "next/link";
 import {
   UploadCloud,
@@ -14,6 +22,10 @@ import {
   Sparkles,
   SlidersHorizontal,
 } from "lucide-react";
+import { createAnalysisDedupeKey, createAnalysisEntry } from "@/lib/analysisHistory.mjs";
+import { addHistoryEntry } from "@/redux/historySlice";
+import { saveAnalysisHistory } from "@/lib/historyService";
+import AnalysisHistory from "@/components/AnalysisHistory";
 
 // 2D Chart Components (fast client bundle)
 import BarChart from "@/components/chart2D/BarChart";
@@ -63,14 +75,54 @@ function ChartLoadingPlaceholder({ name }) {
   );
 }
 
+function ChartValidationMessage({ message, warning = false }) {
+  if (!message) return null;
+  return (
+    <div className={`rounded-xl border px-4 py-3 text-sm ${warning
+      ? "border-amber-200 bg-amber-50 text-amber-800"
+      : "border-slate-200 bg-slate-50 text-slate-600"}`}>
+      {message}
+    </div>
+  );
+}
+
+function displayColumnLabel(header = "") {
+  return header
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\s+INR$/i, " (INR)");
+}
+
+function getChartTitle(type, xLabel, yLabel, sizeLabel) {
+  if (type === "Pie") return `Distribution of ${yLabel} by ${xLabel}`;
+  if (type === "Scatter") return `Correlation: ${xLabel} vs ${yLabel}`;
+  if (type === "Bubble") return `${xLabel} vs ${yLabel} (Size: ${sizeLabel})`;
+  return `${yLabel} by ${xLabel}`;
+}
+
 function TabSectionContent() {
   const dispatch = useDispatch();
   const searchParams = useSearchParams();
   const reduxExcel = useSelector((state) => state.excel);
+  const historyEntries = useSelector((state) => state.history?.entries || []);
+  const user = useSelector((state) => state.auth?.user);
+  const userId = String(user?._id || user?.id || "anonymous");
 
-  const [activeTab, setActiveTab] = useState("2D");
+  const initialTabParam = searchParams.get("tab")?.toUpperCase();
+  const validTabs = ["2D", "3D", "SUMMARY", "AI", "HISTORY"];
+  const [activeTab, setActiveTab] = useState(
+    validTabs.includes(initialTabParam) ? initialTabParam : "2D"
+  );
   const [active2DType, setActive2DType] = useState("Bar");
   const [active3DType, setActive3DType] = useState("Bar3D");
+
+  useEffect(() => {
+    const tabParam = searchParams.get("tab")?.toUpperCase();
+    if (tabParam && validTabs.includes(tabParam)) {
+      setActiveTab(tabParam);
+    }
+  }, [searchParams]);
 
   const [rawDataset, setRawDataset] = useState([]);
   const [fileName, setFileName] = useState("");
@@ -81,7 +133,7 @@ function TabSectionContent() {
   const [zAxisCol, setZAxisCol] = useState(2);
   const [sizeAxisCol, setSizeAxisCol] = useState(3);
 
-  // Load Data safely from Redux -> sessionStorage -> searchParams -> demo data
+  // Load data from Redux, session storage, or an explicitly supplied URL dataset.
   useEffect(() => {
     if (reduxExcel?.data && reduxExcel.data.length > 0) {
       setRawDataset(reduxExcel.data);
@@ -122,18 +174,8 @@ function TabSectionContent() {
       }
     }
 
-    // Default sample data for demo if no file has been uploaded yet
-    const demoData = [
-      ["Region", "Sales", "Profit", "Units", "Satisfaction"],
-      ["North America", 45000, 12000, 320, 88],
-      ["Europe", 38000, 9500, 275, 84],
-      ["Asia Pacific", 52000, 16000, 410, 91],
-      ["Latin America", 21000, 4200, 160, 78],
-      ["Middle East", 18500, 5100, 130, 82],
-      ["Africa", 14000, 3100, 95, 75],
-    ];
-    setRawDataset(demoData);
-    setFileName("Sample Sales Dataset.xlsx");
+    setRawDataset([]);
+    setFileName("");
   }, [reduxExcel, searchParams, dispatch]);
 
   const headers = useMemo(() => {
@@ -148,36 +190,22 @@ function TabSectionContent() {
     return rawDataset.slice(1);
   }, [rawDataset]);
 
-  // Analyze columns to distinguish numeric vs categorical
+  // Classify full columns rather than coercing labels into apparent measures.
   const columnAnalysis = useMemo(() => {
-    return headers.map((header, colIndex) => {
-      let numericCount = 0;
-      let totalValid = 0;
-      // Sampling up to 100 rows for fast type detection on large datasets
-      const sample = rows.slice(0, 100);
-      sample.forEach((row) => {
-        const val = row[colIndex];
-        if (val !== undefined && val !== null && String(val).trim() !== "") {
-          totalValid++;
-          const num = Number(String(val).replace(/[^0-9.-]+/g, ""));
-          if (!isNaN(num)) numericCount++;
-        }
-      });
-      const isNumeric = totalValid > 0 && numericCount / totalValid >= 0.7;
-      return { colIndex, header, isNumeric, totalValid };
-    });
+    return inferColumnTypes(headers, rows);
   }, [headers, rows]);
 
   // Adjust defaults when headers change
   useEffect(() => {
     if (headers.length > 0) {
-      const firstCategorical = columnAnalysis.find((c) => !c.isNumeric)?.colIndex ?? 0;
-      const firstNumeric = columnAnalysis.find((c) => c.isNumeric)?.colIndex ?? Math.min(1, headers.length - 1);
+      const firstCategorical =
+        columnAnalysis.find((c) => ["categorical", "date", "boolean"].includes(c.type))?.colIndex ?? 0;
+      const firstNumeric = columnAnalysis.find((c) => c.type === "numeric")?.colIndex ?? Math.min(1, headers.length - 1);
       const secondNumeric =
-        columnAnalysis.find((c) => c.isNumeric && c.colIndex !== firstNumeric)?.colIndex ??
+        columnAnalysis.find((c) => c.type === "numeric" && c.colIndex !== firstNumeric)?.colIndex ??
         Math.min(2, headers.length - 1);
       const thirdNumeric =
-        columnAnalysis.find((c) => c.isNumeric && c.colIndex !== firstNumeric && c.colIndex !== secondNumeric)?.colIndex ??
+        columnAnalysis.find((c) => c.type === "numeric" && c.colIndex !== firstNumeric && c.colIndex !== secondNumeric)?.colIndex ??
         Math.min(3, headers.length - 1);
 
       setXAxisCol(firstCategorical);
@@ -187,152 +215,283 @@ function TabSectionContent() {
     }
   }, [columnAnalysis, headers]);
 
-  // Prepared 2D chart data
-  const chart2DData = useMemo(() => {
-    if (rows.length === 0 || headers.length === 0) {
-      return { labels: [], datasets: [] };
+  const select2DType = (type) => {
+    const mappings = getRecommendedMappings(columnAnalysis, "2D", type);
+    if (mappings) {
+      setXAxisCol(mappings.x);
+      setYAxisCol(mappings.y);
+      if (mappings.size !== undefined) setSizeAxisCol(mappings.size);
+    }
+    setActive2DType(type);
+  };
+
+  const select3DType = (type) => {
+    const mappings = getRecommendedMappings(columnAnalysis, "3D", type);
+    if (mappings) {
+      setXAxisCol(mappings.x);
+      if (mappings.y !== undefined) setYAxisCol(mappings.y);
+      if (mappings.z !== undefined) setZAxisCol(mappings.z);
+      if (mappings.size !== undefined) setSizeAxisCol(mappings.size);
+    }
+    setActive3DType(type);
+  };
+
+  const handleAnalyticsTabChange = (tab) => {
+    if (tab === "3D") select3DType(active3DType);
+    setActiveTab(tab);
+  };
+
+  const selectedXType = columnAnalysis[xAxisCol]?.type;
+  const selectedYType = columnAnalysis[yAxisCol]?.type;
+  const selectedZType = columnAnalysis[zAxisCol]?.type;
+  const selectedSizeType = columnAnalysis[sizeAxisCol]?.type;
+
+  const chart2DResult = useMemo(() => {
+    const empty = { data: { labels: [], datasets: [] }, error: "", warning: "" };
+    if (!rows.length) return { ...empty, error: "Upload a worksheet with data rows to create a chart." };
+
+    if (active2DType === "Scatter" || active2DType === "Bubble") {
+      const indices = active2DType === "Bubble" ? [xAxisCol, yAxisCol, sizeAxisCol] : [xAxisCol, yAxisCol];
+      const types = active2DType === "Bubble"
+        ? [selectedXType, selectedYType, selectedSizeType]
+        : [selectedXType, selectedYType];
+      if (types.some((type) => type !== "numeric")) {
+        return { ...empty, error: `${active2DType} charts require numeric columns for every mapped dimension.` };
+      }
+      const { points, skipped } = buildNumericPoints(rows, indices);
+      const visiblePoints = active2DType === "Bubble"
+        ? points.filter(({ values }) => values[2] > 0)
+        : points;
+      if (!visiblePoints.length) {
+        return { ...empty, error: "No rows contain valid numeric values for the selected chart dimensions." };
+      }
+      const sizes = active2DType === "Bubble"
+        ? visiblePoints.map(({ values }) => values[2])
+        : [];
+      const minSize = sizes.length ? sizes.reduce((min, value) => Math.min(min, value), Infinity) : 0;
+      const maxSize = sizes.length ? sizes.reduce((max, value) => Math.max(max, value), -Infinity) : 0;
+      const data = visiblePoints.map(({ values, label }) => {
+        if (active2DType === "Scatter") return { x: values[0], y: values[1], label };
+        const sizeValue = values[2];
+        return {
+          x: values[0],
+          y: values[1],
+          r: maxSize === minSize ? 10 : 5 + ((sizeValue - minSize) / (maxSize - minSize)) * 20,
+          sizeValue,
+          label,
+        };
+      });
+      return {
+        data: {
+          datasets: [{
+            label: active2DType === "Bubble"
+              ? `${displayColumnLabel(headers[sizeAxisCol])} (size)`
+                : `${displayColumnLabel(headers[xAxisCol])} vs ${displayColumnLabel(headers[yAxisCol])}`,
+            data,
+            backgroundColor: active2DType === "Bubble" ? "rgba(245, 158, 11, 0.7)" : "rgba(59, 130, 246, 0.75)",
+            borderColor: active2DType === "Bubble" ? "rgba(217, 119, 6, 1)" : "rgba(37, 99, 235, 1)",
+          }],
+        },
+        error: "",
+        warning: skipped + (points.length - visiblePoints.length)
+          ? `${skipped + (points.length - visiblePoints.length)} row(s) with missing, invalid, or non-positive ${active2DType === "Bubble" ? "bubble" : "chart"} dimensions were excluded.`
+          : "",
+      };
     }
 
-    const labels = rows.map((r) => String(r[xAxisCol] ?? `Row`));
-    const values = rows.map((r) => {
-      const raw = String(r[yAxisCol] ?? "0").replace(/[^0-9.-]+/g, "");
-      const num = Number(raw);
-      return isNaN(num) ? 0 : num;
-    });
+    if (selectedYType !== "numeric") {
+      return { ...empty, error: "Choose a numeric measure for the Y axis; categorical labels are not quantities." };
+    }
+    if (active2DType === "Pie" && !["categorical", "date", "boolean"].includes(selectedXType)) {
+      return { ...empty, error: "Pie charts require meaningful category or date labels on the X axis." };
+    }
+    const result = buildCategoryChart(rows, xAxisCol, yAxisCol, { positiveOnly: active2DType === "Pie" });
+    if (result.error) return { ...result, data: empty.data };
 
     const colors = [
-      "rgba(59, 130, 246, 0.75)",
-      "rgba(147, 51, 234, 0.75)",
-      "rgba(16, 185, 129, 0.75)",
-      "rgba(245, 158, 11, 0.75)",
-      "rgba(236, 72, 153, 0.75)",
-      "rgba(6, 182, 212, 0.75)",
-      "rgba(239, 68, 68, 0.75)",
-      "rgba(99, 102, 241, 0.75)",
+      "rgba(37, 99, 235, 0.78)", "rgba(124, 58, 237, 0.78)", "rgba(5, 150, 105, 0.78)",
+      "rgba(217, 119, 6, 0.78)", "rgba(219, 39, 119, 0.78)", "rgba(8, 145, 178, 0.78)",
+      "rgba(220, 38, 38, 0.78)", "rgba(79, 70, 229, 0.78)",
     ];
+    result.data.datasets[0].label = displayColumnLabel(headers[yAxisCol]);
+    result.data.datasets[0].backgroundColor = active2DType === "Pie"
+      ? result.data.labels.map((_, index) => colors[index % colors.length])
+      : active2DType === "Area" ? "rgba(5, 150, 105, 0.2)" : "rgba(37, 99, 235, 0.78)";
+    result.data.datasets[0].borderColor = active2DType === "Area" ? "#059669" : "#2563eb";
+    result.data.datasets[0].borderWidth = active2DType === "Pie" ? 1 : 2;
+    result.data.datasets[0].borderColor = active2DType === "Pie" ? "#ffffff" : active2DType === "Area" ? "#059669" : "#2563eb";
+    result.data.datasets[0].borderRadius = active2DType === "Bar" ? 5 : 0;
+    result.data.datasets[0].fill = active2DType === "Area";
+    result.data.datasets[0].tension = 0.25;
+    return result;
+  }, [active2DType, rows, xAxisCol, yAxisCol, sizeAxisCol, selectedXType, selectedYType, selectedSizeType, headers]);
 
-    if (active2DType === "Pie") {
-      return {
-        labels,
-        datasets: [
-          {
-            data: values,
-            backgroundColor: labels.map((_, i) => colors[i % colors.length]),
-            borderWidth: 1,
-          },
-        ],
-      };
-    }
-
-    if (active2DType === "Scatter") {
-      return {
-        datasets: [
-          {
-            label: `${headers[xAxisCol]} vs ${headers[yAxisCol]}`,
-            data: rows.map((r) => {
-              const xVal = Number(String(r[xAxisCol] ?? "0").replace(/[^0-9.-]+/g, "")) || 0;
-              const yVal = Number(String(r[yAxisCol] ?? "0").replace(/[^0-9.-]+/g, "")) || 0;
-              return { x: xVal, y: yVal };
-            }),
-            backgroundColor: "rgba(236, 72, 153, 0.8)",
-            pointRadius: 6,
-          },
-        ],
-      };
-    }
-
-    if (active2DType === "Bubble") {
-      return {
-        datasets: [
-          {
-            label: `${headers[yAxisCol]}`,
-            data: rows.map((r) => {
-              const xVal = Number(String(r[xAxisCol] ?? "0").replace(/[^0-9.-]+/g, "")) || 0;
-              const yVal = Number(String(r[yAxisCol] ?? "0").replace(/[^0-9.-]+/g, "")) || 0;
-              const rVal = Math.min(
-                35,
-                Math.max(5, Number(String(r[sizeAxisCol] ?? "15").replace(/[^0-9.-]+/g, "")) || 15)
-              );
-              return { x: xVal, y: yVal, r: rVal };
-            }),
-            backgroundColor: "rgba(245, 158, 11, 0.7)",
-          },
-        ],
-      };
-    }
-
-    return {
-      labels,
-      datasets: [
-        {
-          label: headers[yAxisCol] || "Value",
-          data: values,
-          backgroundColor:
-            active2DType === "Area"
-              ? "rgba(16, 185, 129, 0.25)"
-              : "rgba(59, 130, 246, 0.75)",
-          borderColor:
-            active2DType === "Area"
-              ? "rgba(16, 185, 129, 1)"
-              : "rgba(59, 130, 246, 1)",
-          borderWidth: 2,
-          fill: active2DType === "Area",
-          tension: 0.35,
-          borderRadius: 4,
-        },
-      ],
-    };
-  }, [rows, headers, xAxisCol, yAxisCol, sizeAxisCol, active2DType]);
-
-  // Prepared 3D chart data - computed only when 3D tab is active
   const chart3DProps = useMemo(() => {
-    if (activeTab !== "3D" || rows.length === 0 || headers.length === 0) {
-      return { x: [], y: [], z: [], size: [], labels: [] };
+    const empty = { x: [], y: [], z: [], size: [], labels: [], error: "" };
+    if (activeTab !== "3D") return empty;
+    if (!rows.length) return { ...empty, error: "Upload a worksheet with data rows to create a 3D chart." };
+    if (active3DType === "Pie3D" || active3DType === "PowerMap") return empty;
+    if ([selectedXType, selectedYType, selectedZType].some((type) => type !== "numeric")) {
+      return { ...empty, error: "3D plots require numeric X, Y, and Z columns. Nominal categories are not encoded as measurements." };
     }
-
-    const labels = rows.map((r) => String(r[xAxisCol] ?? `Item`));
-    const xVals = rows.map((r) => {
-      const num = Number(String(r[xAxisCol] ?? "0").replace(/[^0-9.-]+/g, ""));
-      return isNaN(num) ? String(r[xAxisCol] ?? "") : num;
-    });
-    const yVals = rows.map((r) => {
-      const num = Number(String(r[yAxisCol] ?? "0").replace(/[^0-9.-]+/g, ""));
-      return isNaN(num) ? String(r[yAxisCol] ?? "") : num;
-    });
-    const zVals = rows.map((r) => {
-      const num = Number(String(r[zAxisCol] ?? "0").replace(/[^0-9.-]+/g, ""));
-      return isNaN(num) ? 0 : num;
-    });
-    const sizeVals = rows.map((r) => {
-      const num = Number(String(r[sizeAxisCol] ?? "15").replace(/[^0-9.-]+/g, ""));
-      return isNaN(num) ? 15 : num;
-    });
-
+    if (active3DType === "Bubble3D" && selectedSizeType !== "numeric") {
+      return { ...empty, error: "3D bubble charts require a numeric size column." };
+    }
+    const indices = active3DType === "Bubble3D"
+      ? [xAxisCol, yAxisCol, zAxisCol, sizeAxisCol]
+      : [xAxisCol, yAxisCol, zAxisCol];
+    const { points } = buildNumericPoints(rows, indices);
+    const visiblePoints = active3DType === "Bubble3D"
+      ? points.filter(({ values }) => values[3] > 0)
+      : points;
+    if (!visiblePoints.length) {
+      return { ...empty, error: "No rows contain valid numeric values for all selected 3D dimensions." };
+    }
+    const sizes = active3DType === "Bubble3D"
+      ? visiblePoints.map(({ values }) => values[3])
+      : [];
+    const minSize = sizes.length ? sizes.reduce((min, value) => Math.min(min, value), Infinity) : 0;
+    const maxSize = sizes.length ? sizes.reduce((max, value) => Math.max(max, value), -Infinity) : 0;
     return {
-      x: xVals,
-      y: yVals,
-      z: zVals,
-      size: sizeVals,
-      labels,
+      x: visiblePoints.map(({ values }) => values[0]),
+      y: visiblePoints.map(({ values }) => values[1]),
+      z: visiblePoints.map(({ values }) => values[2]),
+      size: active3DType === "Bubble3D"
+        ? sizes.map((value) => maxSize === minSize ? 10 : 5 + ((value - minSize) / (maxSize - minSize)) * 20)
+        : [],
+      sizeValues: active3DType === "Bubble3D" ? sizes : [],
+      labels: visiblePoints.map(({ label }) => label),
+      error: "",
     };
-  }, [activeTab, rows, headers, xAxisCol, yAxisCol, zAxisCol, sizeAxisCol]);
+  }, [activeTab, active3DType, rows, xAxisCol, yAxisCol, zAxisCol, sizeAxisCol, selectedXType, selectedYType, selectedZType, selectedSizeType]);
+
+  const surfaceGrid = useMemo(
+    () => buildSurfaceGrid(rows, xAxisCol, yAxisCol, zAxisCol),
+    [rows, xAxisCol, yAxisCol, zAxisCol]
+  );
+
+  const chart3DPie = useMemo(() => {
+    if (!["categorical", "date", "boolean"].includes(selectedXType) || selectedZType !== "numeric") {
+      return { labels: [], values: [], error: "3D pie charts require category/date labels and a numeric measure." };
+    }
+    const result = buildCategoryChart(rows, xAxisCol, zAxisCol, { positiveOnly: true });
+    return {
+      labels: result.data.labels,
+      values: result.data.datasets[0]?.data || [],
+      error: result.error,
+    };
+  }, [rows, xAxisCol, zAxisCol, selectedXType, selectedZType]);
+
+  const powerMap = useMemo(() => {
+    if (!/\bcountr(?:y|ies)\b/i.test(headers[xAxisCol] || "") || selectedZType !== "numeric") {
+      return { labels: [], values: [], error: "Power Map requires a country/countries column and a numeric measure." };
+    }
+    const result = buildCategoryChart(rows, xAxisCol, zAxisCol);
+    return {
+      labels: result.data.labels,
+      values: result.data.datasets[0]?.data || [],
+      error: result.error,
+    };
+  }, [rows, xAxisCol, zAxisCol, selectedZType, headers]);
+
+  const saveHistoryEntry = (details) => {
+    const entryDetails = {
+      ...details,
+      userId,
+      datasetName: fileName || "Uploaded dataset",
+      rowCount: rows.length,
+    };
+    if (details.type === "chart" || details.type === "summary") {
+      entryDetails.dedupeKey = createAnalysisDedupeKey(entryDetails);
+    }
+    const entry = createAnalysisEntry(entryDetails);
+    saveAnalysisHistory(dispatch, entry, Boolean(user));
+  };
+
+  const saveChartHistory = () => {
+    const title = getChartTitle(
+      active2DType,
+      displayColumnLabel(headers[xAxisCol]),
+      displayColumnLabel(headers[yAxisCol]),
+      displayColumnLabel(headers[sizeAxisCol])
+    );
+    const dataset = chart2DResult.data.datasets?.[0];
+    const chartRows = chart2DResult.data.labels?.length
+      ? chart2DResult.data.labels.map((label, index) => [label, dataset?.data?.[index]])
+      : (dataset?.data || []).map((point) => [point.label || "", point.x, point.y, point.sizeValue ?? point.r ?? ""]);
+    saveHistoryEntry({
+      type: "chart",
+      title,
+      chart: {
+        chartType: active2DType,
+        columns: chart2DResult.data.labels?.length
+          ? [displayColumnLabel(headers[xAxisCol]), displayColumnLabel(headers[yAxisCol])]
+          : ["Record", displayColumnLabel(headers[xAxisCol]), displayColumnLabel(headers[yAxisCol]), active2DType === "Bubble" ? displayColumnLabel(headers[sizeAxisCol]) : "Size"],
+        rows: chartRows.slice(0, 200),
+        totalRows: chartRows.length,
+      },
+    });
+  };
+
+  const save3DChartHistory = () => {
+    let columns;
+    let chartRows;
+    if (active3DType === "Pie3D") {
+      columns = [displayColumnLabel(headers[xAxisCol]), displayColumnLabel(headers[zAxisCol])];
+      chartRows = chart3DPie.labels.map((label, index) => [label, chart3DPie.values[index]]);
+    } else if (active3DType === "PowerMap") {
+      columns = [displayColumnLabel(headers[xAxisCol]), displayColumnLabel(headers[zAxisCol])];
+      chartRows = powerMap.labels.map((label, index) => [label, powerMap.values[index]]);
+    } else if (active3DType === "Surface") {
+      columns = [displayColumnLabel(headers[xAxisCol]), displayColumnLabel(headers[yAxisCol]), displayColumnLabel(headers[zAxisCol])];
+      chartRows = surfaceGrid.zMatrix.flatMap((values, yIndex) =>
+        values.map((value, xIndex) => [surfaceGrid.xValues[xIndex], surfaceGrid.yValues[yIndex], value])
+          .filter((row) => row[2] !== null)
+      );
+    } else {
+      columns = [displayColumnLabel(headers[xAxisCol]), displayColumnLabel(headers[yAxisCol]), displayColumnLabel(headers[zAxisCol])];
+      if (active3DType === "Bubble3D") columns.push(displayColumnLabel(headers[sizeAxisCol]));
+      chartRows = chart3DProps.x.map((x, index) => [
+        x,
+        chart3DProps.y[index],
+        chart3DProps.z[index],
+        ...(active3DType === "Bubble3D" ? [chart3DProps.sizeValues[index]] : []),
+      ]);
+    }
+    saveHistoryEntry({
+      type: "chart",
+      title: `${active3DType}: ${columns.join(" / ")}`,
+      chart: { chartType: active3DType, columns, rows: chartRows.slice(0, 200), totalRows: chartRows.length },
+    });
+  };
+
+  const saveSummaryHistory = () => {
+    saveHistoryEntry({
+      type: "summary",
+      title: `Statistics summary for ${fileName || "uploaded dataset"}`,
+      chart: {
+        chartType: "Summary",
+        columns: ["Column", "Type", "Valid rows", "Sum", "Average", "Minimum", "Maximum"],
+        rows: summaryStats.map((item) => [
+          item.header, item.type, item.count, item.sum, item.mean, item.min, item.max,
+        ]),
+        totalRows: summaryStats.length,
+      },
+    });
+  };
 
   // Compute Summary Statistics ONLY when SUMMARY tab is viewed
   const summaryStats = useMemo(() => {
     if (activeTab !== "SUMMARY") return [];
     return columnAnalysis.map((col) => {
-      const vals = rows
-        .map((r) => {
-          const raw = String(r[col.colIndex] ?? "").replace(/[^0-9.-]+/g, "");
-          const num = Number(raw);
-          return isNaN(num) || raw === "" ? null : num;
-        })
-        .filter((n) => n !== null);
+      const vals = col.type === "numeric"
+        ? rows.map((row) => parseNumericValue(row?.[col.colIndex])).filter((number) => number !== null)
+        : [];
 
       if (vals.length === 0) {
         return {
           ...col,
-          count: rows.length,
+          count: col.type === "numeric" ? 0 : col.validCount,
           min: "N/A",
           max: "N/A",
           mean: "N/A",
@@ -341,8 +500,8 @@ function TabSectionContent() {
       }
 
       const sum = vals.reduce((a, b) => a + b, 0);
-      const min = Math.min(...vals);
-      const max = Math.max(...vals);
+      const min = vals.reduce((current, value) => Math.min(current, value), Infinity);
+      const max = vals.reduce((current, value) => Math.max(current, value), -Infinity);
       const mean = (sum / vals.length).toFixed(2);
 
       return {
@@ -356,10 +515,35 @@ function TabSectionContent() {
     });
   }, [activeTab, columnAnalysis, rows]);
 
+  useEffect(() => {
+    if (activeTab === "2D" && !chart2DResult.error) {
+      saveChartHistory();
+    }
+  }, [activeTab, active2DType, xAxisCol, yAxisCol, sizeAxisCol, chart2DResult, fileName]);
+
+  useEffect(() => {
+    if (activeTab !== "3D") return;
+    const valid =
+      active3DType === "Pie3D" ? !chart3DPie.error :
+      active3DType === "PowerMap" ? !powerMap.error :
+      active3DType === "Surface" ? !chart3DProps.error && !surfaceGrid.error :
+      !chart3DProps.error;
+    if (valid) save3DChartHistory();
+  }, [
+    activeTab, active3DType, xAxisCol, yAxisCol, zAxisCol, sizeAxisCol,
+    chart3DProps, chart3DPie, surfaceGrid, powerMap, fileName,
+  ]);
+
+  useEffect(() => {
+    if (activeTab === "SUMMARY" && summaryStats.length > 0) {
+      saveSummaryHistory();
+    }
+  }, [activeTab, summaryStats, fileName]);
+
   const exportSummaryCsv = () => {
     let csv = "Column,Data Type,Count,Sum,Average,Min,Max\n";
     summaryStats.forEach((s) => {
-      csv += `"${s.header}","${s.isNumeric ? "Numeric" : "Categorical"}",${s.count},"${s.sum}","${s.mean}","${s.min}","${s.max}"\n`;
+      csv += `"${s.header}","${s.type}",${s.count},"${s.sum}","${s.mean}","${s.min}","${s.max}"\n`;
     });
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -382,7 +566,7 @@ function TabSectionContent() {
             </h1>
           </div>
           <p className="text-gray-500 text-sm mt-1">
-            Active Dataset: <span className="font-semibold text-gray-700">{fileName}</span> ({rows.length} rows, {headers.length} columns)
+            Active Dataset: <span className="font-semibold text-gray-700">{fileName || "No dataset selected"}</span> ({rows.length} rows, {headers.length} columns)
           </p>
         </div>
 
@@ -405,7 +589,11 @@ function TabSectionContent() {
       </div>
 
       {/* Main Tab Controller */}
-      <Tab activeTab={activeTab} onTabChange={setActiveTab} />
+      <Tab
+        activeTab={activeTab}
+        onTabChange={handleAnalyticsTabChange}
+        counts={{ history: historyEntries.filter((entry) => entry.userId === userId).length }}
+      />
 
       {/* Control Panel for X/Y/Z Column Selectors */}
       {(activeTab === "2D" || activeTab === "3D") && (
@@ -427,7 +615,7 @@ function TabSectionContent() {
               >
                 {headers.map((h, i) => (
                   <option key={i} value={i}>
-                    {h} {columnAnalysis[i]?.isNumeric ? "(#)" : "(Abc)"}
+                    {h} ({columnAnalysis[i]?.type || "empty"})
                   </option>
                 ))}
               </select>
@@ -444,7 +632,7 @@ function TabSectionContent() {
               >
                 {headers.map((h, i) => (
                   <option key={i} value={i}>
-                    {h} {columnAnalysis[i]?.isNumeric ? "(#)" : "(Abc)"}
+                    {h} ({columnAnalysis[i]?.type || "empty"})
                   </option>
                 ))}
               </select>
@@ -462,14 +650,15 @@ function TabSectionContent() {
                 >
                   {headers.map((h, i) => (
                     <option key={i} value={i}>
-                      {h} {columnAnalysis[i]?.isNumeric ? "(#)" : "(Abc)"}
+                      {h} ({columnAnalysis[i]?.type || "empty"})
                     </option>
                   ))}
                 </select>
               </div>
             )}
 
-            {(active2DType === "Bubble" || active3DType === "Bubble3D") && (
+            {((activeTab === "2D" && active2DType === "Bubble") ||
+              (activeTab === "3D" && active3DType === "Bubble3D")) && (
               <div>
                 <label className="block text-gray-600 font-medium mb-1">
                   Bubble Radius / Size
@@ -481,7 +670,7 @@ function TabSectionContent() {
                 >
                   {headers.map((h, i) => (
                     <option key={i} value={i}>
-                      {h} {columnAnalysis[i]?.isNumeric ? "(#)" : "(Abc)"}
+                      {h} ({columnAnalysis[i]?.type || "empty"})
                     </option>
                   ))}
                 </select>
@@ -505,7 +694,7 @@ function TabSectionContent() {
             ].map((type) => (
               <button
                 key={type.id}
-                onClick={() => setActive2DType(type.id)}
+                onClick={() => select2DType(type.id)}
                 className={`px-4 py-2 rounded-xl text-xs font-semibold transition ${
                   active2DType === type.id
                     ? "bg-indigo-600 text-white shadow-md"
@@ -517,52 +706,65 @@ function TabSectionContent() {
             ))}
           </div>
 
-          <div className="w-full">
+          <div className="w-full space-y-3">
+            {chart2DResult.error ? (
+              <ChartValidationMessage message={chart2DResult.error} />
+            ) : (
+              <>
+            {chart2DResult.warning && <ChartValidationMessage message={chart2DResult.warning} warning />}
             {active2DType === "Bar" && (
               <BarChart
-                chartData={chart2DData}
-                title={`${headers[yAxisCol]} by ${headers[xAxisCol]}`}
-                xAxisLabel={headers[xAxisCol]}
-                yAxisLabel={headers[yAxisCol]}
+                chartData={chart2DResult.data}
+                title={`${displayColumnLabel(headers[yAxisCol])} by ${displayColumnLabel(headers[xAxisCol])}`}
+                xAxisLabel={displayColumnLabel(headers[xAxisCol])}
+                yAxisLabel={displayColumnLabel(headers[yAxisCol])}
+                currency={/inr/i.test(headers[yAxisCol] || "")}
               />
             )}
             {active2DType === "Line" && (
               <LineChart
-                chartData={chart2DData}
-                title={`${headers[yAxisCol]} Trend along ${headers[xAxisCol]}`}
-                xAxisLabel={headers[xAxisCol]}
-                yAxisLabel={headers[yAxisCol]}
+                chartData={chart2DResult.data}
+                title={`${displayColumnLabel(headers[yAxisCol])} by ${displayColumnLabel(headers[xAxisCol])}`}
+                xAxisLabel={displayColumnLabel(headers[xAxisCol])}
+                yAxisLabel={displayColumnLabel(headers[yAxisCol])}
+                currency={/inr/i.test(headers[yAxisCol] || "")}
               />
             )}
             {active2DType === "Area" && (
               <AreaChart
-                chartData={chart2DData}
-                title={`${headers[yAxisCol]} Volume over ${headers[xAxisCol]}`}
-                xAxisLabel={headers[xAxisCol]}
-                yAxisLabel={headers[yAxisCol]}
+                chartData={chart2DResult.data}
+                title={`${displayColumnLabel(headers[yAxisCol])} by ${displayColumnLabel(headers[xAxisCol])}`}
+                xAxisLabel={displayColumnLabel(headers[xAxisCol])}
+                yAxisLabel={displayColumnLabel(headers[yAxisCol])}
+                currency={/inr/i.test(headers[yAxisCol] || "")}
               />
             )}
             {active2DType === "Pie" && (
               <PieChartComponent
-                chartData={chart2DData}
-                title={`Distribution of ${headers[yAxisCol]} by ${headers[xAxisCol]}`}
+                chartData={chart2DResult.data}
+                title={`Distribution of ${displayColumnLabel(headers[yAxisCol])} by ${displayColumnLabel(headers[xAxisCol])}`}
+                currency={/inr/i.test(headers[yAxisCol] || "")}
               />
             )}
             {active2DType === "Scatter" && (
               <ScatterChartComponent
-                chartData={chart2DData}
-                title={`Correlation: ${headers[xAxisCol]} vs ${headers[yAxisCol]}`}
-                xAxisLabel={headers[xAxisCol]}
-                yAxisLabel={headers[yAxisCol]}
+                chartData={chart2DResult.data}
+                title={`Correlation: ${displayColumnLabel(headers[xAxisCol])} vs ${displayColumnLabel(headers[yAxisCol])}`}
+                xAxisLabel={displayColumnLabel(headers[xAxisCol])}
+                yAxisLabel={displayColumnLabel(headers[yAxisCol])}
+                currency={/inr/i.test(headers[yAxisCol] || "")}
               />
             )}
             {active2DType === "Bubble" && (
               <BubbleChartComponent
-                chartData={chart2DData}
-                title={`${headers[xAxisCol]} vs ${headers[yAxisCol]} (Size: ${headers[sizeAxisCol]})`}
-                xAxisLabel={headers[xAxisCol]}
-                yAxisLabel={headers[yAxisCol]}
+                chartData={chart2DResult.data}
+                title={`${displayColumnLabel(headers[xAxisCol])} vs ${displayColumnLabel(headers[yAxisCol])} (Size: ${displayColumnLabel(headers[sizeAxisCol])})`}
+                xAxisLabel={displayColumnLabel(headers[xAxisCol])}
+                yAxisLabel={displayColumnLabel(headers[yAxisCol])}
+                currency={/inr/i.test(headers[yAxisCol] || "")}
               />
+            )}
+              </>
             )}
           </div>
         </div>
@@ -573,17 +775,17 @@ function TabSectionContent() {
         <div>
           <div className="flex flex-wrap gap-2 mb-6">
             {[
-              { id: "Bar3D", label: "3D Column" },
+              { id: "Bar3D", label: "3D Point Plot" },
               { id: "Surface", label: "3D Surface Mesh" },
               { id: "Scatter3D", label: "3D Scatter Cloud" },
               { id: "Bubble3D", label: "3D Bubble Space" },
-              { id: "Area3D", label: "3D Ribbon" },
-              { id: "Pie3D", label: "3D Donut" },
+              { id: "Area3D", label: "3D Line Plot" },
+              { id: "Pie3D", label: "Donut Chart" },
               { id: "PowerMap", label: "3D Globe Power Map" },
             ].map((type) => (
               <button
                 key={type.id}
-                onClick={() => setActive3DType(type.id)}
+                onClick={() => select3DType(type.id)}
                 className={`px-4 py-2 rounded-xl text-xs font-semibold transition ${
                   active3DType === type.id
                     ? "bg-purple-600 text-white shadow-md"
@@ -595,7 +797,28 @@ function TabSectionContent() {
             ))}
           </div>
 
-          <div className="w-full">
+          {(
+            active3DType === "Pie3D" ? !chart3DPie.error :
+            active3DType === "PowerMap" ? !powerMap.error :
+            active3DType === "Surface" ? !chart3DProps.error && !surfaceGrid.error :
+            !chart3DProps.error
+          ) && <p className="mb-4 text-xs text-slate-500">Chart saved to analysis history.</p>}
+
+          <div className="w-full space-y-3">
+            {active3DType === "Pie3D" ? (
+              chart3DPie.error
+                ? <ChartValidationMessage message={chart3DPie.error} />
+                : <PieChart3D labels={chart3DPie.labels} values={chart3DPie.values} title={`Distribution of ${displayColumnLabel(headers[zAxisCol])} by ${displayColumnLabel(headers[xAxisCol])}`} />
+            ) : active3DType === "PowerMap" ? (
+              powerMap.error
+                ? <ChartValidationMessage message={powerMap.error} />
+                : <PowerMapChart3D locations={powerMap.labels} values={powerMap.values} measureLabel={displayColumnLabel(headers[zAxisCol])} title={`Geographic Power Map: ${displayColumnLabel(headers[zAxisCol])}`} />
+            ) : chart3DProps.error ? (
+              <ChartValidationMessage message={chart3DProps.error} />
+            ) : active3DType === "Surface" && surfaceGrid.error ? (
+              <ChartValidationMessage message={surfaceGrid.error} />
+            ) : (
+              <>
             {active3DType === "Bar3D" && (
               <BarChart3D
                 dataPoints={[
@@ -611,24 +834,25 @@ function TabSectionContent() {
                       color: chart3DProps.z,
                       colorscale: "Viridis",
                       opacity: 0.9,
-                      colorbar: { title: headers[zAxisCol] || "Z", thickness: 12 },
+                      colorbar: { title: displayColumnLabel(headers[zAxisCol]) || "Z", thickness: 12 },
                     },
                   },
                 ]}
-                title={`3D Multi-Axis: ${headers[xAxisCol]} / ${headers[yAxisCol]} / ${headers[zAxisCol]}`}
-                xLabel={headers[xAxisCol]}
-                yLabel={headers[yAxisCol]}
-                zLabel={headers[zAxisCol]}
+                title={`3D Point Plot: ${displayColumnLabel(headers[xAxisCol])} / ${displayColumnLabel(headers[yAxisCol])} / ${displayColumnLabel(headers[zAxisCol])}`}
+                xLabel={displayColumnLabel(headers[xAxisCol])}
+                yLabel={displayColumnLabel(headers[yAxisCol])}
+                zLabel={displayColumnLabel(headers[zAxisCol])}
               />
             )}
             {active3DType === "Surface" && (
               <SurfaceChart3D
-                xValues={chart3DProps.x.slice(0, 20)}
-                yValues={chart3DProps.y.slice(0, 20)}
-                title={`3D Surface Topology: ${headers[zAxisCol]}`}
-                xLabel={headers[xAxisCol]}
-                yLabel={headers[yAxisCol]}
-                zLabel={headers[zAxisCol]}
+                xValues={surfaceGrid.xValues}
+                yValues={surfaceGrid.yValues}
+                zMatrix={surfaceGrid.zMatrix}
+                title={`3D Surface Topology: ${displayColumnLabel(headers[zAxisCol])}`}
+                xLabel={displayColumnLabel(headers[xAxisCol])}
+                yLabel={displayColumnLabel(headers[yAxisCol])}
+                zLabel={displayColumnLabel(headers[zAxisCol])}
               />
             )}
             {active3DType === "Scatter3D" && (
@@ -637,10 +861,10 @@ function TabSectionContent() {
                 y={chart3DProps.y}
                 z={chart3DProps.z}
                 labels={chart3DProps.labels}
-                title={`3D Point Cloud: (${headers[xAxisCol]}, ${headers[yAxisCol]}, ${headers[zAxisCol]})`}
-                xLabel={headers[xAxisCol]}
-                yLabel={headers[yAxisCol]}
-                zLabel={headers[zAxisCol]}
+                title={`3D Point Cloud: (${displayColumnLabel(headers[xAxisCol])}, ${displayColumnLabel(headers[yAxisCol])}, ${displayColumnLabel(headers[zAxisCol])})`}
+                xLabel={displayColumnLabel(headers[xAxisCol])}
+                yLabel={displayColumnLabel(headers[yAxisCol])}
+                zLabel={displayColumnLabel(headers[zAxisCol])}
               />
             )}
             {active3DType === "Bubble3D" && (
@@ -649,36 +873,27 @@ function TabSectionContent() {
                 y={chart3DProps.y}
                 z={chart3DProps.z}
                 size={chart3DProps.size}
+                sizeValues={chart3DProps.sizeValues}
                 labels={chart3DProps.labels}
-                title={`4D Space: ${headers[xAxisCol]} × ${headers[yAxisCol]} × ${headers[zAxisCol]} (Size: ${headers[sizeAxisCol]})`}
-                xLabel={headers[xAxisCol]}
-                yLabel={headers[yAxisCol]}
-                zLabel={headers[zAxisCol]}
-                sizeLabel={headers[sizeAxisCol]}
+                title={`3D Bubble: ${displayColumnLabel(headers[xAxisCol])} / ${displayColumnLabel(headers[yAxisCol])} / ${displayColumnLabel(headers[zAxisCol])}`}
+                xLabel={displayColumnLabel(headers[xAxisCol])}
+                yLabel={displayColumnLabel(headers[yAxisCol])}
+                zLabel={displayColumnLabel(headers[zAxisCol])}
+                sizeLabel={displayColumnLabel(headers[sizeAxisCol])}
               />
             )}
             {active3DType === "Area3D" && (
               <AreaChart3D
-                x={chart3DProps.labels}
+                x={chart3DProps.x}
+                y={chart3DProps.y}
                 z={chart3DProps.z}
-                title={`3D Ribbon Projection: ${headers[zAxisCol]}`}
-                xLabel={headers[xAxisCol]}
-                zLabel={headers[zAxisCol]}
+                title={`3D Line Plot: ${displayColumnLabel(headers[zAxisCol])}`}
+                xLabel={displayColumnLabel(headers[xAxisCol])}
+                yLabel={displayColumnLabel(headers[yAxisCol])}
+                zLabel={displayColumnLabel(headers[zAxisCol])}
               />
             )}
-            {active3DType === "Pie3D" && (
-              <PieChart3D
-                labels={chart3DProps.labels}
-                values={chart3DProps.z}
-                title={`3D Perspective Distribution: ${headers[zAxisCol]}`}
-              />
-            )}
-            {active3DType === "PowerMap" && (
-              <PowerMapChart3D
-                locations={chart3DProps.labels}
-                values={chart3DProps.z}
-                title={`Geographic Power Map: ${headers[zAxisCol]}`}
-              />
+              </>
             )}
           </div>
         </div>
@@ -692,17 +907,21 @@ function TabSectionContent() {
               <h3 className="text-lg font-bold text-gray-800">
                 Descriptive Column Statistics
               </h3>
-              <p className="text-xs text-gray-500">
-                Statistical metrics automatically computed across all dataset columns
-              </p>
+              <p className="text-xs text-gray-500">Statistical metrics computed for numeric columns.</p>
             </div>
-            <button
-              onClick={exportSummaryCsv}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition"
-            >
-              <Download className="w-3.5 h-3.5" />
-              Export Summary CSV
-            </button>
+            <div className="flex gap-2">
+              {summaryStats.length > 0 && (
+                <span className="self-center text-xs text-slate-500">Saved to analysis history</span>
+              )}
+              <button
+                onClick={exportSummaryCsv}
+                disabled={summaryStats.length === 0}
+                className="flex items-center gap-1.5 rounded-xl bg-indigo-50 px-3.5 py-2 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-40"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Export Summary CSV
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -730,12 +949,12 @@ function TabSectionContent() {
                     <td className="p-3">
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                          col.isNumeric
+                          col.type === "numeric"
                             ? "bg-emerald-100 text-emerald-800"
                             : "bg-blue-100 text-blue-800"
                         }`}
                       >
-                        {col.isNumeric ? "Numeric" : "Categorical"}
+                        {col.type}
                       </span>
                     </td>
                     <td className="p-3 text-gray-600">{col.count}</td>
@@ -745,6 +964,13 @@ function TabSectionContent() {
                     <td className="p-3 text-gray-600 font-mono">{col.max}</td>
                   </tr>
                 ))}
+                {summaryStats.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="p-8 text-center text-sm text-gray-500">
+                      Upload a worksheet with data to see column statistics.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -772,6 +998,8 @@ function TabSectionContent() {
           </Link>
         </div>
       )}
+
+      {activeTab === "HISTORY" && <AnalysisHistory userId={userId} />}
     </div>
   );
 }

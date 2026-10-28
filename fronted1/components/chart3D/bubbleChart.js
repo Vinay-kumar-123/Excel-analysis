@@ -7,6 +7,7 @@ export default function BubbleChart3D({
   y = [],
   z = [],
   size = [],
+  sizeValues = [],
   labels = [],
   title = "3D Bubble Chart",
   xLabel = "X Axis",
@@ -14,24 +15,21 @@ export default function BubbleChart3D({
   zLabel = "Z Axis",
   sizeLabel = "Bubble Size",
 }) {
-  const defaultX = [10, 20, 30, 40, 50];
-  const defaultY = [15, 25, 35, 45, 55];
-  const defaultZ = [100, 200, 150, 300, 250];
-  const defaultSize = [15, 25, 40, 30, 50];
-
   const plotData = [
     {
       type: "scatter3d",
       mode: "markers",
-      x: x.length > 0 ? x : defaultX,
-      y: y.length > 0 ? y : defaultY,
-      z: z.length > 0 ? z : defaultZ,
-      text: labels.length > 0 ? labels : undefined,
+      x,
+      y,
+      z,
+      text: labels,
+      customdata: sizeValues,
+      hovertemplate: `${xLabel}: %{x}<br>${yLabel}: %{y}<br>${zLabel}: %{z}<br>${sizeLabel}: %{customdata}<br>%{text}<extra></extra>`,
       marker: {
-        size: size.length > 0 ? size : defaultSize,
+        size,
         sizemode: "diameter",
         sizeref: 2,
-        color: z.length > 0 ? z : defaultZ,
+        color: z,
         colorscale: "Cividis",
         opacity: 0.7,
         colorbar: { title: zLabel, thickness: 12 },
